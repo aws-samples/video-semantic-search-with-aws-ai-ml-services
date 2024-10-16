@@ -1,0 +1,341 @@
+{
+  "Comment": "A description of my state machine",
+  "StartAt": "Parallel",
+  "States": {
+    "Parallel": {
+      "Type": "Parallel",
+      "Next": "Video Shots",
+      "Branches": [
+        {
+          "StartAt": "Start Transcribe Task And Wait Callback",
+          "States": {
+            "Start Transcribe Task And Wait Callback": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "Parameters": {
+                "FunctionName": "${TranscribeArn}",
+                "Payload": {
+                  "TaskToken.$": "$$.Task.Token",
+                  "vssParams.$": "$"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 1,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
+              "End": true,
+              "ResultPath": "$.TranscribeParams"
+            }
+          }
+        },
+        {
+          "StartAt": "Start Rekognition Shot Detection Task And Wait Callback",
+          "States": {
+            "Start Rekognition Shot Detection Task And Wait Callback": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
+              "Parameters": {
+                "FunctionName": "${RekognitionShotDetectionArn}",
+                "Payload": {
+                  "TaskToken.$": "$$.Task.Token",
+                  "vssParams.$": "$"
+                }
+              },
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 6,
+                  "BackoffRate": 2
+                }
+              ],
+              "ResultPath": "$.RekognitionShotDetectionParams",
+              "TimeoutSeconds": 3600,
+              "End": true
+            }
+          }
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Notify failed task"
+        }
+      ]
+    },
+    "Video Shots": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "Generate Shot Image",
+        "States": {
+          "Generate Shot Image": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "OutputPath": "$.Payload",
+            "Parameters": {
+              "Payload.$": "$",
+              "FunctionName": "${GenerateShotImageArn}"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed",
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 15,
+                "MaxAttempts": 20,
+                "BackoffRate": 1
+              }
+            ],
+            "Next": "Parallel (1)"
+          },
+          "Parallel (1)": {
+            "Type": "Parallel",
+            "Branches": [
+              {
+                "StartAt": "Start Rekognition Celebrity Detection",
+                "States": {
+                  "Start Rekognition Celebrity Detection": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "Parameters": {
+                      "Payload.$": "$",
+                      "FunctionName": "${RekognitionCelebrityDetectionArn}"
+                    },
+                    "Retry": [
+                      {
+                        "ErrorEquals": [
+                          "Lambda.ServiceException",
+                          "Lambda.AWSLambdaException",
+                          "Lambda.SdkClientException",
+                          "Lambda.TooManyRequestsException"
+                        ],
+                        "IntervalSeconds": 1,
+                        "MaxAttempts": 3,
+                        "BackoffRate": 2
+                      }
+                    ],
+                    "End": true,
+                    "OutputPath": "$.Payload"
+                  }
+                }
+              },
+              {
+                "StartAt": "Rekognize Other Figures",
+                "States": {
+                  "Rekognize Other Figures": {
+                    "Type": "Task",
+                    "Resource": "arn:aws:states:::lambda:invoke",
+                    "Parameters": {
+                      "Payload.$": "$",
+                      "FunctionName": "${RekognizeOtherFiguresArn}"
+                    },
+                    "Retry": [
+                      {
+                        "ErrorEquals": [
+                          "States.TaskFailed",
+                          "Lambda.ServiceException",
+                          "Lambda.AWSLambdaException",
+                          "Lambda.SdkClientException",
+                          "Lambda.TooManyRequestsException"
+                        ],
+                        "IntervalSeconds": 60,
+                        "MaxAttempts": 20,
+                        "BackoffRate": 1
+                      }
+                    ],
+                    "OutputPath": "$.Payload",
+                    "End": true
+                  }
+                }
+              }
+            ],
+            "Next": "Create Shot Image Collection"
+          },
+          "Create Shot Image Collection": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "OutputPath": "$.Payload",
+            "Parameters": {
+              "Payload.$": "$",
+              "FunctionName": "${CreateShotCollectionArn}"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "MaxConcurrency": 50,
+      "Label": "VideoShots",
+      "Next": "Video Shot (2)",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Notify failed task",
+          "ResultPath": null
+        }
+      ],
+      "ItemsPath": "$[1].RekognitionShotDetectionParams.Shots",
+      "ToleratedFailurePercentage": 2,
+      "ResultPath": "$"
+    },
+    "Video Shot (2)": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "Inference Shot Description",
+        "States": {
+          "Inference Shot Description": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "OutputPath": "$.Payload",
+            "Parameters": {
+              "Payload.$": "$",
+              "FunctionName": "${GenerateShotDescArn}"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed",
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 15,
+                "MaxAttempts": 20,
+                "BackoffRate": 1
+              }
+            ],
+            "Next": "Start Embedding and Ingestion to OpenSearch Task"
+          },
+          "Start Embedding and Ingestion to OpenSearch Task": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "OutputPath": "$.Payload",
+            "Parameters": {
+              "Payload.$": "$",
+              "FunctionName": "${EmbeddingAossArn}"
+            },
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "States.TaskFailed",
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 10,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "End": true
+          }
+        }
+      },
+      "Next": "Notify completed job",
+      "Label": "VideoShot2",
+      "MaxConcurrency": 50,
+      "ItemsPath": "$",
+      "ToleratedFailurePercentage": 2,
+      "ResultPath": null,
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Notify failed task",
+          "ResultPath": null
+        }
+      ]
+    },
+    "Notify completed job": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${CompletedJobArn}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Success"
+    },
+    "Notify failed task": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "OutputPath": "$.Payload",
+      "Parameters": {
+        "Payload.$": "$",
+        "FunctionName": "${FailedJobArn}"
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Fail"
+    },
+    "Fail": {
+      "Type": "Fail"
+    },
+    "Success": {
+      "Type": "Succeed"
+    }
+  }
+}

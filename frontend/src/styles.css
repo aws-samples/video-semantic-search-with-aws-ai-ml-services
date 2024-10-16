@@ -1,0 +1,22 @@
+#top-nav {
+  position: sticky;
+  top: 0;
+  z-index: 1002;
+}
+
+[data-amplify-authenticator] {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+}
+
+.input-image {
+  width: 30%;
+  margin-left: 35%;
+}
+
+.jobs-table {
+  height: 52vh;
+  overflow: auto;
+}

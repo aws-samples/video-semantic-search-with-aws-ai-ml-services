@@ -1,0 +1,8 @@
+# Crash log files
+crash.log
+crash.*.log
+
+*.zip
+
+.DS_Store
+.aws-sam
