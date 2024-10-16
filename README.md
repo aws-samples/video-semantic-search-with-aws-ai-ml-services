@@ -73,13 +73,13 @@ This deployment is currently set up to deploy into the **us-east-1** region. Ple
 1. Clone the repository
 
 ```bash
-git clone git@ssh.gitlab.aws.dev:vshhuynh/video-semantic-search.git
+git clone https://github.com/aws-samples/video-semantic-search-with-aws-ai-ml-services.git
 ```
 
 2. Move into the cloned repository
 
 ```bash
-cd video-semantic-search
+cd video-semantic-search-with-aws-ai-ml-services
 ```
 
 3. Start the deployment
