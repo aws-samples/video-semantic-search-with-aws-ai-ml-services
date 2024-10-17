@@ -98,9 +98,18 @@ The authenication is managed by Amazon Cognito. You will need to create a new us
 
 ### Login to your new web application
 
-Once complete, the CLI output will show a value for the CloudFront URL to be able to view the web application, e.g. https://d123abc.cloudfront.net/
+Once complete, the CLI output will show a value for the CloudFront URL to be able to view the web application, e.g. `https://d123abc.cloudfront.net/`
 
 ### User Interface
+
+The solution currently supports the following query types:
+
+1. **Text Search**
+  - Input text-based queries to search for specific content. Example: All the scenes that feature football field.
+  - Use quotation marks ("") to emphasize specific keywords. Example: Werner Vogels "shaking hands" with other people.
+
+2. **Image Search**
+   - Upload an image to find similar or related content. 
 
 ![UI](assets/video-semantic-search-ui.gif "Video Semantic Search UI")
 
