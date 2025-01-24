@@ -273,7 +273,7 @@
       },
       "Next": "Notify completed job",
       "Label": "VideoShot2",
-      "MaxConcurrency": 50,
+      "MaxConcurrency": 10,
       "ItemsPath": "$",
       "ToleratedFailurePercentage": 2,
       "ResultPath": null,
