@@ -23,10 +23,18 @@ Parameters:
     Type: Number
     Description: Bedrock Image Embedding Dimension
     Default: 1024
-  BedrockLlm:
+  BedrockLlmSonnet3:
     Type: String
     Description: Bedrock Large Language Model
-    Default: anthropic.claude-3-sonnet-20240229-v1:0
+    Default: us.anthropic.claude-3-sonnet-20240229-v1:0
+  BedrockLlmSonnet35:
+    Type: String
+    Description: Bedrock Large Language Model
+    Default: us.anthropic.claude-3-5-sonnet-20241022-v2:0
+  BedrockLlmNova:
+    Type: String
+    Description: Bedrock Large Language Model
+    Default: us.amazon.nova-pro-v1:0
 
 Globals:
   Function:
@@ -646,7 +654,7 @@ Resources:
           bucket_images: !Ref S3Images
           bucket_transcripts: !Ref S3Transcripts
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
-          bedrock_llm: !Ref BedrockLlm
+          bedrock_llm: !Ref BedrockLlmNova
           image_embedding_model: !Ref BedrockImageEmbeddingModel
       Policies:
         - Version: 2012-10-17
@@ -663,7 +671,9 @@ Resources:
             - Effect: Allow
               Action:
                 - bedrock:InvokeModel*
-              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
             - Effect: Allow
               Action:
                 - aoss:APIAccessAll
@@ -694,7 +704,6 @@ Resources:
           bucket_videos: !Ref S3Videos
           bucket_images: !Ref S3Images
           bucket_shots: !Ref S3Shots
-          bedrock_model: !Ref BedrockLlm
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -707,7 +716,7 @@ Resources:
                 - !Sub arn:aws:s3:::${S3Shots}/*
                 - !Sub arn:aws:s3:::${S3Images}/*
       Layers:
-        - "arn:aws:lambda:us-east-1:770693421928:layer:Klayers-p312-Pillow:2"
+        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-Pillow:2"
 
   GenerateShotImageLogGroup:
     Type: AWS::Logs::LogGroup
@@ -1007,7 +1016,7 @@ Resources:
           bucket_videos: !Ref S3Videos
           bucket_shots: !Ref S3Shots
           bucket_images: !Ref S3Images
-          bedrock_model: !Ref BedrockLlm
+          bedrock_model: !Ref BedrockLlmSonnet3
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -1022,7 +1031,9 @@ Resources:
             - Effect: Allow
               Action:
                 - bedrock:InvokeModel*
-              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
             - Effect: Allow
               Action:
                 - iam:GetRole
@@ -1418,7 +1429,7 @@ Resources:
           region: !Ref AWS::Region
           bucket_videos: !Ref S3Videos
           bucket_images: !Ref S3Images
-          bedrock_model: !Ref BedrockLlm
+          bedrock_model: !Ref BedrockLlmSonnet35
           text_embedding_model: !Ref BedrockTextEmbeddingModel
           image_embedding_model: !Ref BedrockImageEmbeddingModel
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
@@ -1450,7 +1461,11 @@ Resources:
             - Effect: Allow
               Action:
                 - bedrock:InvokeModel*
-              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*
+              Resource: !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+            - Effect: Allow
+              Action:
+                - bedrock:Rerank
+              Resource: "*"
             - Effect: Allow
               Action:
                 - aoss:APIAccessAll

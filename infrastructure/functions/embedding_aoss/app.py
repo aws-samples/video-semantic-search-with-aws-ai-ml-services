@@ -31,6 +31,9 @@ def lambda_handler(event, context):
         os.environ["text_embedding_model"], shot_description
     )
     shot_image_embedding = get_image_embedding(bucket_shots, jobId, shot_id)
+    shot_transcript_embedding = get_text_embedding(
+        os.environ["text_embedding_model"], shot_transcript
+    )
 
     embedding_request_body = json.dumps(
         {
@@ -45,6 +48,7 @@ def lambda_handler(event, context):
             "shot_transcript": shot_transcript,
             "shot_desc_vector": shot_desc_embedding,
             "shot_image_vector": shot_image_embedding,
+            "shot_transcript_vector": shot_transcript_embedding,
         }
     )
 

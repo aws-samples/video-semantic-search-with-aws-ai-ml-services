@@ -37,36 +37,52 @@ def lambda_handler(event, context):
     return {"statusCode": 200, "body": json.dumps(response)}
 
 
+MAX_OPENSEARCH_RESULTS = 100
+OPENSEARCH_RELEVANCE_THRESHOLD = 0.5
+MAX_RERANK_RESULTS = 50
+RERANK_RELEVANCE_THRESHOLD = 0.1
+
+
 def searchByText(aoss_index, client, user_query):
-    response = comprehend_client.detect_entities(Text=user_query, LanguageCode="en")
-    names = []
-    locations = []
-    for entity in response["Entities"]:
-        if entity["Type"] == "PERSON":
-            names.append(entity["Text"])
-
-    entities = names + locations
-    if entities:
-        entities = ", ".join(entities)
-    else:
-        entities = ""
-
-    text_embedding = get_text_embedding(os.environ["text_embedding_model"], user_query)
+    query_embedding = get_text_embedding(os.environ["text_embedding_model"], user_query)
 
     aoss_query = {
-        "size": 50,
+        "size": MAX_OPENSEARCH_RESULTS,
         "query": {
-            "script_score": {
-                "query": {"bool": {"should": []}},
-                "script": {
-                    "lang": "knn",
-                    "source": "knn_score",
-                    "params": {
-                        "field": "shot_desc_vector",
-                        "query_value": text_embedding,
-                        "space_type": "cosinesimil",
+            "bool": {
+                "should": [
+                    {
+                        "script_score": {
+                            "query": {"match_all": {}},
+                            "script": {
+                                "lang": "knn",
+                                "source": "knn_score",
+                                "params": {
+                                    "field": "shot_desc_vector",
+                                    "query_value": query_embedding,
+                                    "space_type": "cosinesimil",
+                                },
+                            },
+                            "boost": 3.0,  # 75/25 weight split favouring shot description over transcript
+                        }
                     },
-                },
+                    {
+                        "script_score": {
+                            "query": {"match_all": {}},
+                            "script": {
+                                "lang": "knn",
+                                "source": "knn_score",
+                                "params": {
+                                    "field": "shot_transcript_vector",
+                                    "query_value": query_embedding,
+                                    "space_type": "cosinesimil",
+                                },
+                            },
+                            "boost": 1.0,
+                        }
+                    },
+                ],
+                "minimum_should_match": 1,
             }
         },
         "_source": [
@@ -95,6 +111,7 @@ def searchByText(aoss_index, client, user_query):
                             "shot_publicFigures",
                             "shot_privateFigures",
                             "shot_description",
+                            "shot_transcript",
                         ],
                         "type": "phrase",
                     }
@@ -103,10 +120,10 @@ def searchByText(aoss_index, client, user_query):
 
     response = client.search(body=aoss_query, index=aoss_index)
     hits = response["hits"]["hits"]
-    response = []
+    unranked_results = []
     for hit in hits:
-        if hit["_score"] >= 0:  # Set score threshold
-            response.append(
+        if hit["_score"] >= OPENSEARCH_RELEVANCE_THRESHOLD:
+            unranked_results.append(
                 {
                     "jobId": hit["_source"]["jobId"],
                     "video_name": hit["_source"]["video_name"],
@@ -117,11 +134,63 @@ def searchByText(aoss_index, client, user_query):
                     "shot_publicFigures": hit["_source"]["shot_publicFigures"],
                     "shot_privateFigures": hit["_source"]["shot_privateFigures"],
                     "shot_transcript": hit["_source"]["shot_transcript"],
-                    "score": hit["_score"],
                 }
             )
+    rerank_results = rerank(user_query, unranked_results, MAX_RERANK_RESULTS)
+    ranked_results = []
+    for rerank_result in rerank_results:
+        if rerank_result["relevanceScore"] >= RERANK_RELEVANCE_THRESHOLD:
+            idx = rerank_result["index"]
+            unranked_results[idx]["score"] = rerank_result["relevanceScore"]
+            ranked_results.append(unranked_results[idx])
 
-    return response
+    return ranked_results
+
+
+def rerank(user_query, unranked_results, num_results):
+    docs = []
+    for unranked_result in unranked_results:
+        docs.append(
+            {
+                "shot_description": unranked_result["shot_description"],
+                "shot_publicFigures": unranked_result["shot_publicFigures"],
+                "shot_privateFigures": unranked_result["shot_privateFigures"],
+                "shot_transcript": unranked_result["shot_transcript"],
+            }
+        )
+    bedrock_agent_runtime = boto3.client(
+        "bedrock-agent-runtime", region_name="us-west-2"
+    )
+    rerank_model_id = "cohere.rerank-v3-5:0"
+    model_package_arn = f"arn:aws:bedrock:us-west-2::foundation-model/{rerank_model_id}"
+    sources = []
+    for doc in docs:
+        sources.append(
+            {
+                "inlineDocumentSource": {
+                    "jsonDocument": doc,
+                    "type": "JSON",
+                },
+                "type": "INLINE",
+            }
+        )
+    response = bedrock_agent_runtime.rerank(
+        queries=[{"type": "TEXT", "textQuery": {"text": user_query}}],
+        sources=sources,
+        rerankingConfiguration={
+            "type": "BEDROCK_RERANKING_MODEL",
+            "bedrockRerankingConfiguration": {
+                "numberOfResults": min(num_results, len(docs)),
+                "modelConfiguration": {
+                    "modelArn": model_package_arn,
+                    # "additionalModelRequestFields": {
+                    #     "rank_fields": ["shot_description", "shot_transcript"]
+                    # },
+                },
+            },
+        },
+    )
+    return response["results"]
 
 
 def get_opensearch_client(host, region, index):

@@ -45,42 +45,30 @@ def recognise_person_name(bucket_images, jobId, frames):
     """
 
     model_id = os.environ["bedrock_model"]
-    accept = "application/json"
-    content_type = "application/json"
+
     for frame in frames:
+        message = {
+            "role": "user",
+            "content": [
+                {"text": prompt},
+            ],
+        }
         s3_object = s3_client.get_object(
             Bucket=bucket_images, Key=f"{jobId}/{frame}.png"
         )
         image_content = s3_object["Body"].read()
-        base64_image_string = base64.b64encode(image_content).decode()
-        body = json.dumps(
-            {
-                "messages": [
-                    {
-                        "role": "user",
-                        "content": [
-                            {"type": "text", "text": prompt},
-                            {
-                                "type": "image",
-                                "source": {
-                                    "type": "base64",
-                                    "media_type": "image/png",
-                                    "data": base64_image_string,
-                                },
-                            },
-                        ],
-                    }
-                ],
-                "anthropic_version": "bedrock-2023-05-31",
-                "max_tokens": 256,
-            }
+        message["content"].append(
+            {"image": {"format": "png", "source": {"bytes": image_content}}}
         )
-        response = bedrock_client.invoke_model(
-            body=body, modelId=model_id, accept=accept, contentType=content_type
+        messages = [message]
+        inferenceConfig = {"maxTokens": 128}
+
+        response = bedrock_client.converse(
+            modelId=model_id, messages=messages, inferenceConfig=inferenceConfig
         )
-        response_body = json.loads(response["body"].read())
-        response_body = response_body["content"][0]["text"]
-        if "No names recognized" in response_body:
-            response_body = ""
-        shot_frames.append({"frame": frame, "frame_privateFigures": response_body})
+        output_message = response["output"]["message"]
+        output_message = output_message["content"][0]["text"]
+        if "No names recognized" in output_message:
+            output_message = ""
+        shot_frames.append({"frame": frame, "frame_privateFigures": output_message})
     return shot_frames
