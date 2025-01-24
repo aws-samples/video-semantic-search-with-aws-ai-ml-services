@@ -20,3 +20,46 @@
   height: 52vh;
   overflow: auto;
 }
+
+.result-container {
+  display: flex;
+  border: 1px solid #ddd;
+  margin-bottom: 20px;
+  border-radius: 10px;
+  background-color: #fcfbfb;
+  overflow: hidden;
+}
+
+.info-container {
+  flex: 1;
+  padding: 15px;
+  overflow-y: auto;
+  max-height: 270px;
+}
+
+.result-title {
+  color: #0066cc;
+  font-size: 18px;
+  margin: 0 0 10px 0;
+}
+
+.result-info {
+  margin: 5px 0;
+  font-size: 14px;
+}
+
+.result-score {
+  font-weight: bold;
+  color: #28a745;
+}
+
+.additional-info {
+  margin-top: 15px;
+  padding-top: 15px;
+  border-top: 1px solid #ddd;
+}
+
+.additional-info p {
+  margin: 5px 0;
+  font-size: 14px;
+}

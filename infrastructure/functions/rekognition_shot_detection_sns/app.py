@@ -67,8 +67,8 @@ def getShotDetectionResults(jobId, video_name, rekognitionTaskId):
 
     def get_frames(shot, N):
         start_frame = shot["StartFrameNumber"]
-        end_frame = (
-            shot["EndFrameNumber"] - 1
+        end_frame = max(
+            start_frame, shot["EndFrameNumber"] - 1
         )  # frame - 1 to avoid bug not getting the last frame of the video
         step = (end_frame - start_frame) / (N - 1)
         frames = [int(start_frame + i * step) for i in range(N)]

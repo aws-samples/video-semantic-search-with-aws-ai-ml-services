@@ -120,6 +120,16 @@ def create_opensearch_index(host, region, index, len_embedding):
                             "parameters": {"ef_construction": 512, "m": 16},
                         },
                     },
+                    "shot_transcript_vector": {
+                        "type": "knn_vector",
+                        "dimension": len_embedding,
+                        "method": {
+                            "engine": "nmslib",
+                            "space_type": "cosinesimil",
+                            "name": "hnsw",
+                            "parameters": {"ef_construction": 512, "m": 16},
+                        },
+                    },
                 }
             },
             "settings": {

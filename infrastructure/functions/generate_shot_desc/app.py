@@ -202,46 +202,34 @@ def generate_shot_description(bucket_images, jobId, shot_frames, shot_transcript
 
     # prompt += f"Audio transcription: {shot_transcript}"
 
-    # os.environ["bedrock_llm"]
-    model_id = "anthropic.claude-3-5-sonnet-20240620-v1:0"
-    accept = "application/json"
-    content_type = "application/json"
-    body = {
-        "messages": [
-            {
-                "role": "user",
-                "content": [
-                    {"type": "text", "text": prompt},
-                ],
-            }
+    model_id = os.environ["bedrock_llm"]
+    message = {
+        "role": "user",
+        "content": [
+            {"text": prompt},
         ],
-        "anthropic_version": "bedrock-2023-05-31",
-        "max_tokens": 512,
     }
     for index, value in enumerate(shot_frames):
         s3_object = s3_client.get_object(
             Bucket=bucket_images, Key=f"{jobId}/{value["frame"]}.png"
         )
         image_content = s3_object["Body"].read()
-        base64_image_string = base64.b64encode(image_content).decode()
-        body["messages"][0]["content"].append(
-            {
-                "type": "image",
-                "source": {
-                    "type": "base64",
-                    "media_type": "image/png",
-                    "data": base64_image_string,
-                },
-            }
+        message["content"].append(
+            {"image": {"format": "png", "source": {"bytes": image_content}}}
         )
-
-    response = bedrock_client.invoke_model(
-        body=json.dumps(body), modelId=model_id, accept=accept, contentType=content_type
+    
+    messages = [message]
+    inferenceConfig = {
+        "maxTokens": 512,
+    }
+    
+    response = bedrock_client.converse(
+        modelId=model_id, messages=messages, inferenceConfig=inferenceConfig
     )
-    response_body = json.loads(response["body"].read())
-    response_body = response_body["content"][0]["text"]
+    output_message = response["output"]["message"]
+    output_message = output_message["content"][0]["text"]
 
-    return response_body
+    return output_message
 
 
 def get_titan_image_embedding(bucket_images, jobId, embedding_model, image_name):

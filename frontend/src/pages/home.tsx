@@ -200,8 +200,8 @@ const Home = forwardRef((props, ref) => {
         <hr></hr>
         <Grid
           gridDefinition={[
-            { colspan: { default: 5, xxs: 7 } },
-            { colspan: { default: 7, xxs: 5 } },
+            { colspan: { default: 4, xxs: 8 } },
+            { colspan: { default: 8, xxs: 4 } },
           ]}
         >
           <div>
@@ -467,51 +467,71 @@ function search(
         if (response.status == 200) {
           const results = response.data;
           results.forEach((result: { [x: string]: string }) => {
-            let timestamp = parseInt(result["shot_startTime"]);
-            let key = result["video_name"] + timestamp;
+            let startTime = parseInt(result["shot_startTime"]);
+            let endTime = parseInt(result["shot_endTime"]);
+            let key = result["video_name"] + startTime;
             if (!uniqueTimestamps.has(key)) {
+              const resultContainer = document.createElement("div");
+              resultContainer.className = "result-container";
+
               const videoElement = document.createElement("video");
               videoElement.controls = true;
-              getVideoUrl(result["video_name"], timestamp, videoElement);
+              getVideoUrl(
+                result["video_name"],
+                startTime,
+                endTime,
+                videoElement
+              );
               videoElement.style.width = "480px";
               videoElement.style.height = "270px";
-              videoElement.style.borderRadius = "10px"; // Set the desired border radius
+              videoElement.style.borderRadius = "10px";
+              resultContainer.appendChild(videoElement);
 
-              videoContainer.appendChild(videoElement);
+              const infoContainer = document.createElement("div");
+              infoContainer.className = "info-container";
 
-              const titleElement = document.createElement("p");
+              const titleElement = document.createElement("h3");
               titleElement.textContent = result["video_name"];
-              titleElement.style.margin = "0px";
-              titleElement.style.marginTop = "10px";
-              titleElement.style.marginBottom = "5px";
-              titleElement.style.color = "blue";
-              videoContainer.appendChild(titleElement);
+              titleElement.className = "result-title";
+              infoContainer.appendChild(titleElement);
 
-              const shot_startTime = millisecondsToTimeFormat(
-                parseInt(result["shot_startTime"])
-              );
-              const shot_endTime = millisecondsToTimeFormat(
-                parseInt(result["shot_endTime"])
-              );
-              const frameTimeElement = document.createElement("p");
-              frameTimeElement.textContent = `Shot Time: ${shot_startTime} - ${shot_endTime}`;
-              frameTimeElement.style.margin = "0px";
-              frameTimeElement.style.marginBottom = "40px";
-              videoContainer.appendChild(frameTimeElement);
+              const shot_startTime = millisecondsToTimeFormat(startTime);
+              const shot_endTime = millisecondsToTimeFormat(endTime);
+              const duration = (endTime - startTime) / 1000;
+
+              const infoElement = document.createElement("div");
+              infoElement.innerHTML = `
+      <p class="result-info"><strong>Timestamp:</strong></p>
+      <p class="result-info">Start: ${shot_startTime}</p>
+      <p class="result-info">End: ${shot_endTime}</p>
+      <p class="result-info result-score">Relevance Score: ${parseFloat(
+        result["score"]
+      ).toFixed(2)}</p>
+    `;
+              infoContainer.appendChild(infoElement);
+
+              const additionalInfo = document.createElement("div");
+              additionalInfo.className = "additional-info";
+              additionalInfo.innerHTML = `
+      <p><strong>Public Figures:</strong> ${
+        result["shot_publicFigures"] || "None"
+      }</p>
+      <p><strong>Private Figures:</strong> ${
+        result["shot_privateFigures"] || "None"
+      }</p>
+      <p><strong>Transcript:</strong> ${
+        result["shot_transcript"] || "Not available"
+      }</p>
+      <p><strong>Description:</strong> ${
+        result["shot_description"] || "Not available"
+      }</p>
+    `;
+              infoContainer.appendChild(additionalInfo);
+
+              resultContainer.appendChild(infoContainer);
+              videoContainer.appendChild(resultContainer);
 
               uniqueTimestamps.add(key);
-              console.log("Score: " + result["score"]);
-              console.log("Video name: " + result["video_name"]);
-              console.log("Shot id: " + result["shot_id"]);
-              console.log(
-                "Shot public figures: " + result["shot_publicFigures"]
-              );
-              console.log(
-                "Shot private figures: " + result["shot_privateFigures"]
-              );
-              console.log("Shot transcript: " + result["shot_transcript"]);
-              console.log("Shot description: " + result["shot_description"]);
-              console.log("========================");
             }
           });
         } else {
@@ -554,51 +574,71 @@ function searchByImage(
         if (response.status == 200) {
           const results = response.data;
           results.forEach((result: { [x: string]: string }) => {
-            let timestamp = parseInt(result["shot_startTime"]);
-            let key = result["video_name"] + timestamp;
+            let startTime = parseInt(result["shot_startTime"]);
+            let endTime = parseInt(result["shot_endTime"]);
+            let key = result["video_name"] + startTime;
             if (!uniqueTimestamps.has(key)) {
+              const resultContainer = document.createElement("div");
+              resultContainer.className = "result-container";
+
               const videoElement = document.createElement("video");
               videoElement.controls = true;
-              getVideoUrl(result["video_name"], timestamp, videoElement);
+              getVideoUrl(
+                result["video_name"],
+                startTime,
+                endTime,
+                videoElement
+              );
               videoElement.style.width = "480px";
               videoElement.style.height = "270px";
-              videoElement.style.borderRadius = "10px"; // Set the desired border radius
+              videoElement.style.borderRadius = "10px";
+              resultContainer.appendChild(videoElement);
 
-              videoContainer.appendChild(videoElement);
+              const infoContainer = document.createElement("div");
+              infoContainer.className = "info-container";
 
-              const titleElement = document.createElement("p");
+              const titleElement = document.createElement("h3");
               titleElement.textContent = result["video_name"];
-              titleElement.style.margin = "0px";
-              titleElement.style.marginTop = "10px";
-              titleElement.style.marginBottom = "5px";
-              titleElement.style.color = "blue";
-              videoContainer.appendChild(titleElement);
+              titleElement.className = "result-title";
+              infoContainer.appendChild(titleElement);
 
-              const shot_startTime = millisecondsToTimeFormat(
-                parseInt(result["shot_startTime"])
-              );
-              const shot_endTime = millisecondsToTimeFormat(
-                parseInt(result["shot_endTime"])
-              );
-              const frameTimeElement = document.createElement("p");
-              frameTimeElement.textContent = `Shot Time: ${shot_startTime} - ${shot_endTime}`;
-              frameTimeElement.style.margin = "0px";
-              frameTimeElement.style.marginBottom = "40px";
-              videoContainer.appendChild(frameTimeElement);
+              const shot_startTime = millisecondsToTimeFormat(startTime);
+              const shot_endTime = millisecondsToTimeFormat(endTime);
+              const duration = (endTime - startTime) / 1000;
+
+              const infoElement = document.createElement("div");
+              infoElement.innerHTML = `
+      <p class="result-info"><strong>Timestamp:</strong></p>
+      <p class="result-info">Start: ${shot_startTime}</p>
+      <p class="result-info">End: ${shot_endTime}</p>
+      <p class="result-info result-score">Relevance Score: ${parseFloat(
+        result["score"]
+      ).toFixed(2)}</p>
+    `;
+              infoContainer.appendChild(infoElement);
+
+              const additionalInfo = document.createElement("div");
+              additionalInfo.className = "additional-info";
+              additionalInfo.innerHTML = `
+      <p><strong>Public Figures:</strong> ${
+        result["shot_publicFigures"] || "None"
+      }</p>
+      <p><strong>Private Figures:</strong> ${
+        result["shot_privateFigures"] || "None"
+      }</p>
+      <p><strong>Transcript:</strong> ${
+        result["shot_transcript"] || "Not available"
+      }</p>
+      <p><strong>Description:</strong> ${
+        result["shot_description"] || "Not available"
+      }</p>
+    `;
+              infoContainer.appendChild(additionalInfo);
+
+              resultContainer.appendChild(infoContainer);
+              videoContainer.appendChild(resultContainer);
 
               uniqueTimestamps.add(key);
-              console.log("Score: " + result["score"]);
-              console.log("Video name: " + result["video_name"]);
-              console.log("Shot id: " + result["shot_id"]);
-              console.log(
-                "Shot public figures: " + result["shot_publicFigures"]
-              );
-              console.log(
-                "Shot private figures: " + result["shot_privateFigures"]
-              );
-              console.log("Shot transcript: " + result["shot_transcript"]);
-              console.log("Shot description: " + result["shot_description"]);
-              console.log("========================");
             }
           });
         } else {
@@ -613,7 +653,8 @@ function searchByImage(
 
 function getVideoUrl(
   video_name: string,
-  timestamp: number,
+  startTime: number,
+  endTime: number,
   videoElement: HTMLVideoElement
 ) {
   const fetchData = async () => {
@@ -625,7 +666,16 @@ function getVideoUrl(
         if (response.status == 200) {
           var presignedUrl = response.data;
           videoElement.src = presignedUrl;
-          videoElement.currentTime = (timestamp + 1) / 1000;
+          videoElement.currentTime = (startTime + 1) / 1000;
+          const checkTime = () => {
+            if (videoElement.currentTime >= endTime / 1000) {
+              videoElement.pause();
+              videoElement.removeEventListener("timeupdate", checkTime);
+            }
+          };
+          videoElement.removeEventListener("timeupdate", checkTime);
+          videoElement.addEventListener("timeupdate", checkTime);
+
           videoElement.load();
         }
       })
