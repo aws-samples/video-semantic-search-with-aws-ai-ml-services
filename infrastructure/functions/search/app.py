@@ -40,7 +40,7 @@ def lambda_handler(event, context):
 MAX_OPENSEARCH_RESULTS = 100
 OPENSEARCH_RELEVANCE_THRESHOLD = 0.5
 MAX_RERANK_RESULTS = 50
-RERANK_RELEVANCE_THRESHOLD = 0.1
+RERANK_RELEVANCE_THRESHOLD = 0.05
 
 
 def searchByText(aoss_index, client, user_query):
