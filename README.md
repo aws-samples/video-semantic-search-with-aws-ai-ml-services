@@ -84,8 +84,8 @@ cd video-semantic-search-with-aws-ai-ml-services
 
 3. Start the deployment
 
-> [!NOTE]
-> Check that Docker is installed and running before proceeding with the deployment.
+> [!IMPORTANT]
+> Ensure that Docker is installed and running before proceeding with the deployment.
 
 ```bash
 cd frontend
@@ -103,7 +103,7 @@ The authenication is managed by Amazon Cognito. You will need to create a new us
 
 Once complete, the CLI output will show a value for the CloudFront URL to be able to view the web application, e.g. `https://d123abc.cloudfront.net/`
 
-### User Experience
+## User Experience
 
 The solution currently supports the following query types:
 
@@ -118,9 +118,9 @@ The solution currently supports the following query types:
 
 ![UI](assets/video-semantic-search-ui.gif "Video Semantic Search UI")
 
-### Troubleshooting
+## Troubleshooting
 
-> **Note:** If you encounter any issues during video indexing process, please consider the following steps:
+If you encounter any issues during video indexing process, please consider the following steps:
 
 1. **Step Function Workflow:** Check the Step Function workflow for detailed execution logs and error messages. This is often the best starting point for debugging.
 
