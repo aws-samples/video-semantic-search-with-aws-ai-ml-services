@@ -84,6 +84,9 @@ cd video-semantic-search-with-aws-ai-ml-services
 
 3. Start the deployment
 
+> [!NOTE]
+> Check that Docker is installed and running before proceeding with the deployment.
+
 ```bash
 cd frontend
 npm install
@@ -105,13 +108,27 @@ Once complete, the CLI output will show a value for the CloudFront URL to be abl
 The solution currently supports the following query types:
 
 1. **Text Search**
+
 - Input text-based query to search for specific content. Example: All the scenes that feature football field.
 - Use quotation marks ("") to emphasize specific keywords. Example: Werner Vogels "shaking hands" with other people.
 
 2. **Image Search**
-- Upload an image to find similar or related content. 
+
+- Upload an image to find similar or related content.
 
 ![UI](assets/video-semantic-search-ui.gif "Video Semantic Search UI")
+
+### Troubleshooting
+
+> **Note:** If you encounter any issues during video indexing process, please consider the following steps:
+
+1. **Step Function Workflow:** Check the Step Function workflow for detailed execution logs and error messages. This is often the best starting point for debugging.
+
+2. **Bedrock Access:** Ensure that you have the necessary permissions and access to use Amazon Bedrock in your AWS account and region.
+
+3. **Bedrock Quotas:** Verify your Amazon Bedrock RPM (Requests Per Minute) and TPM (Tokens Per Minute) quotas for the specific models used in the solution. Insufficient quotas can lead to throttling or failures.
+
+4. **Model Availability:** Confirm that the foundation models required for this solution are available in your AWS region.
 
 ## Security
 
