@@ -5,10 +5,15 @@ import boto3
 from botocore.exceptions import ClientError
 import os
 import time
+import subprocess
+from concurrent.futures import ThreadPoolExecutor, as_completed
+import base64
+import glob
 from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
 
 dynamodb_client = boto3.resource("dynamodb")
 bedrock_client = boto3.client(service_name="bedrock-runtime")
+s3_client = boto3.client("s3")
 comprehend_client = boto3.client("comprehend")
 
 
@@ -21,8 +26,11 @@ def lambda_handler(event, context):
         )
         query_type = event["queryStringParameters"]["type"]
         user_query = event["queryStringParameters"]["query"]
-        response = searchByText(aoss_index, client, user_query)
-    else:
+        if query_type == "text":  # search by text
+            response = searchByText(aoss_index, client, user_query)
+        else:  # search by clip
+            response = searchByClip(aoss_index, client, user_query)
+    else:  # search by image
         request_data = json.loads(event["body"])
         aoss_index = request_data["index"]
         client = get_opensearch_client(
@@ -252,6 +260,121 @@ def searchByImage(aoss_index, client, user_query):
             )
 
     return response
+
+
+MAX_CLIPSEARCH_RELEVANCE_THRESHOLD = 0.7
+
+
+def searchByClip(aoss_index, client, user_query):
+    tmp_clip_dir = os.environ["tmp_dir"] + "/clip/"
+    tmp_frames_dir = os.environ["tmp_dir"] + "/" + user_query + "/"
+    os.makedirs(tmp_clip_dir, exist_ok=True)
+    os.makedirs(tmp_frames_dir, exist_ok=True)
+    ffmpeg_path = "/opt/bin/ffmpeg"
+    local_clip_path = os.path.join(tmp_clip_dir, user_query)
+    s3_client.download_file(
+        os.environ["bucket_clip_search"], user_query, local_clip_path
+    )
+
+    output_pattern = f"{tmp_frames_dir}%03d.png"
+    try:
+        subprocess.run(
+            [
+                ffmpeg_path,
+                "-i",
+                local_clip_path,
+                "-vf",
+                "fps=1,select='lte(n,10)'",  # 1 FPS, up to 10 frames
+                "-vsync",
+                "0",
+                "-q:v",
+                "1",
+                output_pattern,
+            ],
+            stderr=subprocess.PIPE,
+        )
+
+        extracted_frames = glob.glob(f"{tmp_frames_dir}*.png")
+        num_frames = len(extracted_frames)
+        all_frame_search_res = []
+        with ThreadPoolExecutor(max_workers=num_frames) as executor:
+            future_to_frame = {}
+            for frame_path in extracted_frames:
+                future = executor.submit(
+                    lambda p: base64.b64encode(open(p, "rb").read()).decode(),
+                    frame_path,
+                )
+                future_to_frame[future] = frame_path
+
+            for future in as_completed(future_to_frame):
+                base64_image = future.result()
+                frame_search_res = searchByImage(aoss_index, client, base64_image)
+                all_frame_search_res.append(frame_search_res)
+
+        # Aggregate results
+        aggregated_results = {}
+        for index, frame_search_res in enumerate(all_frame_search_res):
+            processed_videos = set()
+            for item in frame_search_res:
+                video_name = item["video_name"]
+                if video_name not in processed_videos:
+                    processed_videos.add(video_name)
+
+                    if video_name not in aggregated_results:
+                        aggregated_results[video_name] = {
+                            "scores": [0] * num_frames,
+                            "data": item,
+                        }
+                    # For every frame search, only take into account the highest score of a video in the result
+                    aggregated_results[video_name]["scores"][index] = item["score"]
+                    if (
+                        item["shot_startTime"]
+                        < aggregated_results[video_name]["data"]["shot_startTime"]
+                    ):
+                        aggregated_results[video_name]["data"]["shot_startTime"] = (
+                            result["shot_startTime"]
+                        )
+                    if (
+                        result["shot_endTime"]
+                        > aggregated_results[video_name]["data"]["shot_endTime"]
+                    ):
+                        aggregated_results[video_name]["data"]["shot_endTime"] = result[
+                            "shot_endTime"
+                        ]
+
+        # Calculate score averages and find the best result
+        for video_name, result in aggregated_results.items():
+            result["average_score"] = sum(result["scores"]) / num_frames
+
+        if aggregated_results:
+            best_result = max(
+                aggregated_results.values(), key=lambda x: x["average_score"]
+            )
+            best_result["data"]["average_score"] = best_result["average_score"]
+            best_result["data"]["occurrence_count"] = sum(
+                score > 0 for score in best_result["scores"]
+            )
+            if (
+                best_result["data"]["average_score"]
+                < MAX_CLIPSEARCH_RELEVANCE_THRESHOLD
+            ):
+                return []
+            response = {
+                "video_name": best_result["data"]["video_name"],
+                "shot_startTime": best_result["data"]["shot_startTime"],
+                "shot_endTime": best_result["data"]["shot_endTime"],
+                "score": best_result["data"]["average_score"],
+            }
+            return response
+        else:
+            return []
+
+    finally:
+        # Clean up
+        for frame_path in glob.glob(f"{tmp_frames_dir}*.png"):
+            os.remove(frame_path)
+        if os.path.exists(local_clip_path):
+            os.remove(local_clip_path)
 
 
 def get_text_embedding(text_embedding_model, shot_description):
