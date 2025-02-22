@@ -16,13 +16,11 @@
   justify-content: center;
   align-items: flex-start;
   width: 100%;
-  gap: 5px;
 }
 
 .input-image,
 .input-video {
-  flex: 0 1 auto;
-  width: 22%;
+  width: 200px;
 }
 
 .jobs-table {
