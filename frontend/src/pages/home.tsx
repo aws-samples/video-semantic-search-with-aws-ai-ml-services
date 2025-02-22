@@ -801,46 +801,48 @@ function searchByClip(
       .then((response) => {
         setSearching(false);
         if (response.status == 200) {
-          const result = response.data;
-          let startTime = parseInt(result["shot_startTime"]);
-          let key = result["video_name"] + startTime;
-          if (!uniqueTimestamps.has(key)) {
-            const resultContainer = document.createElement("div");
-            resultContainer.className = "result-container";
+          const results = response.data;
+          results.forEach((result: { [x: string]: string }) => {
+            let startTime = parseInt(result["shot_startTime"]);
+            let key = result["video_name"] + startTime;
+            if (!uniqueTimestamps.has(key)) {
+              const resultContainer = document.createElement("div");
+              resultContainer.className = "result-container";
 
-            const videoElement = document.createElement("video");
-            videoElement.controls = true;
-            getVideoUrl(result["video_name"], startTime, null, videoElement);
-            videoElement.style.width = "480px";
-            videoElement.style.height = "270px";
-            videoElement.style.borderRadius = "10px";
-            resultContainer.appendChild(videoElement);
+              const videoElement = document.createElement("video");
+              videoElement.controls = true;
+              getVideoUrl(result["video_name"], startTime, null, videoElement);
+              videoElement.style.width = "480px";
+              videoElement.style.height = "270px";
+              videoElement.style.borderRadius = "10px";
+              resultContainer.appendChild(videoElement);
 
-            const infoContainer = document.createElement("div");
-            infoContainer.className = "info-container";
+              const infoContainer = document.createElement("div");
+              infoContainer.className = "info-container";
 
-            const titleElement = document.createElement("h3");
-            titleElement.textContent = result["video_name"];
-            titleElement.className = "result-title";
-            infoContainer.appendChild(titleElement);
+              const titleElement = document.createElement("h3");
+              titleElement.textContent = result["video_name"];
+              titleElement.className = "result-title";
+              infoContainer.appendChild(titleElement);
 
-            const shot_startTime = millisecondsToTimeFormat(startTime);
+              const shot_startTime = millisecondsToTimeFormat(startTime);
 
-            const infoElement = document.createElement("div");
-            infoElement.innerHTML = `
+              const infoElement = document.createElement("div");
+              infoElement.innerHTML = `
       <p class="result-info"><strong>Timestamp:</strong></p>
       <p class="result-info">Start: ${shot_startTime}</p>
       <p class="result-info result-score">Relevance Score: ${parseFloat(
         result["score"]
       ).toFixed(2)}</p>
     `;
-            infoContainer.appendChild(infoElement);
+              infoContainer.appendChild(infoElement);
 
-            resultContainer.appendChild(infoContainer);
-            videoContainer.appendChild(resultContainer);
+              resultContainer.appendChild(infoContainer);
+              videoContainer.appendChild(resultContainer);
 
-            uniqueTimestamps.add(key);
-          }
+              uniqueTimestamps.add(key);
+            }
+          });
         } else {
         }
       })

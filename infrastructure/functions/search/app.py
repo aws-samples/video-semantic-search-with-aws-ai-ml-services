@@ -331,18 +331,20 @@ def searchByClip(aoss_index, client, user_query):
                         item["shot_startTime"]
                         < aggregated_results[video_name]["data"]["shot_startTime"]
                     ):
-                        aggregated_results[video_name]["data"]["shot_startTime"] = (
-                            result["shot_startTime"]
-                        )
+                        aggregated_results[video_name]["data"]["shot_startTime"] = item[
+                            "shot_startTime"
+                        ]
                     if (
-                        result["shot_endTime"]
+                        item["shot_endTime"]
                         > aggregated_results[video_name]["data"]["shot_endTime"]
                     ):
-                        aggregated_results[video_name]["data"]["shot_endTime"] = result[
+                        aggregated_results[video_name]["data"]["shot_endTime"] = item[
                             "shot_endTime"
                         ]
 
         # Calculate score averages and find the best result
+        response = []
+
         for video_name, result in aggregated_results.items():
             result["average_score"] = sum(result["scores"]) / num_frames
 
@@ -356,18 +358,17 @@ def searchByClip(aoss_index, client, user_query):
             )
             if (
                 best_result["data"]["average_score"]
-                < MAX_CLIPSEARCH_RELEVANCE_THRESHOLD
+                >= MAX_CLIPSEARCH_RELEVANCE_THRESHOLD
             ):
-                return []
-            response = {
-                "video_name": best_result["data"]["video_name"],
-                "shot_startTime": best_result["data"]["shot_startTime"],
-                "shot_endTime": best_result["data"]["shot_endTime"],
-                "score": best_result["data"]["average_score"],
-            }
-            return response
-        else:
-            return []
+                response.append(
+                    {
+                        "video_name": best_result["data"]["video_name"],
+                        "shot_startTime": best_result["data"]["shot_startTime"],
+                        "shot_endTime": best_result["data"]["shot_endTime"],
+                        "score": best_result["data"]["average_score"],
+                    }
+                )
+        return response
 
     finally:
         # Clean up
