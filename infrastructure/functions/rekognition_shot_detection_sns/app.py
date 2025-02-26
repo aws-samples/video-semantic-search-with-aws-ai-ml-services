@@ -75,7 +75,7 @@ def getShotDetectionResults(jobId, video_name, rekognitionTaskId):
         return frames
 
     for shot in response["Segments"]:
-        shot_frames = get_frames(shot, 4)
+        shot_frames = get_frames(shot, 3)
         frames.extend(shot_frames)
         frames.append(shot["StartFrameNumber"])
 

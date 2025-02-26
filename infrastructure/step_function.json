@@ -198,7 +198,7 @@
           }
         }
       },
-      "MaxConcurrency": 50,
+      "MaxConcurrency": 20,
       "Label": "VideoShots",
       "Next": "Video Shot (2)",
       "Catch": [
@@ -273,7 +273,7 @@
       },
       "Next": "Notify completed job",
       "Label": "VideoShot2",
-      "MaxConcurrency": 10,
+      "MaxConcurrency": 50,
       "ItemsPath": "$",
       "ToleratedFailurePercentage": 2,
       "ResultPath": null,

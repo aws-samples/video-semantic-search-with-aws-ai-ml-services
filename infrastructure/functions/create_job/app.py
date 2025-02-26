@@ -176,8 +176,8 @@ def create_shot_collection(host, region, index, len_embedding):
                         "type": "knn_vector",
                         "dimension": len_embedding,
                         "method": {
-                            "engine": "faiss",
-                            "space_type": "l2",
+                            "engine": "nmslib",
+                            "space_type": "cosinesimil",
                             "name": "hnsw",
                             "parameters": {"ef_construction": 512, "m": 16},
                         },

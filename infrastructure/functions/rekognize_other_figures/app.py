@@ -39,9 +39,22 @@ def lambda_handler(event, context):
 def recognise_person_name(bucket_images, jobId, frames):
     shot_frames = []
     prompt = f"""Analyze this image and identify any person names present.
-    - If person names are recognized, list them separated by commas, with no additional context or text.
-    - If no person names are recognized, respond with "No names recognized."
-    - Do not include any other information or context in your response.
+
+        OUTPUT FORMAT REQUIREMENTS (STRICT):
+        - Return ONLY a comma-separated list of names with no titles OR the exact phrase "No names recognized"
+        - Remove all titles (Mr., Mrs., Ms., Dr., etc.) from any names
+        - No descriptions of the image contents
+        - No explanations of your reasoning
+        - No additional text whatsoever
+
+        Examples of CORRECT responses:
+        - "John Smith, Jane Doe, Robert Johnson"
+        - "No names recognized"
+
+        Examples of INCORRECT responses:
+        - "The image shows Mr. John Smith"
+        - "I can see people but cannot identify names"
+        - "The image contains Jane Doe in a park setting"
     """
 
     model_id = os.environ["bedrock_model"]
