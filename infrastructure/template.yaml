@@ -35,6 +35,10 @@ Parameters:
     Type: String
     Description: Bedrock Large Language Model
     Default: us.amazon.nova-pro-v1:0
+  BedrockLlmSonnet37:
+    Type: String
+    Description: Bedrock Large Language Model
+    Default: us.anthropic.claude-3-7-sonnet-20250219-v1:0
 
 Globals:
   Function:
@@ -654,7 +658,7 @@ Resources:
           bucket_images: !Ref S3Images
           bucket_transcripts: !Ref S3Transcripts
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
-          bedrock_llm: !Ref BedrockLlmNova
+          bedrock_llm: !Ref BedrockLlmSonnet37
           image_embedding_model: !Ref BedrockImageEmbeddingModel
       Policies:
         - Version: 2012-10-17
@@ -1018,7 +1022,7 @@ Resources:
           bucket_videos: !Ref S3Videos
           bucket_shots: !Ref S3Shots
           bucket_images: !Ref S3Images
-          bedrock_model: !Ref BedrockLlmSonnet3
+          bedrock_model: !Ref BedrockLlmSonnet37
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -1476,7 +1480,7 @@ Resources:
           bucket_videos: !Ref S3Videos
           bucket_images: !Ref S3Images
           bucket_clip_search: !Ref S3ClipSearch
-          bedrock_model: !Ref BedrockLlmSonnet35
+          bedrock_model: !Ref BedrockLlmSonnet37
           text_embedding_model: !Ref BedrockTextEmbeddingModel
           image_embedding_model: !Ref BedrockImageEmbeddingModel
           aoss_host: !GetAtt VssCollection.CollectionEndpoint

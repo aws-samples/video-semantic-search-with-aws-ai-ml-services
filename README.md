@@ -62,7 +62,7 @@ Note:
 
 - You can deploy the solution to a different region from where you requested Base Model access.
 - While the Base Model access approval is instant, it might take several minutes to get access and see the list of models in the console.
-- The current deployment requires access to **Claude 3 Sonnet** and **Claude 3.5 Sonnet**.
+- The current deployment requires access to **Claude 3.7 Sonnet**, **Titan Multimodal Embeddings G1**, **Cohere Embedding v3** and **Cohere Rerank 3.5 (us-west-2)**.
 
 ## Deployment
 

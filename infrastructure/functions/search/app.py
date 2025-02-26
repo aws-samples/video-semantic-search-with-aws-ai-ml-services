@@ -109,9 +109,9 @@ def searchByText(aoss_index, client, user_query):
     pattern = r'"(.*?)"'
     matches = re.findall(pattern, user_query)
     if len(matches) > 0:
-        aoss_query["query"]["script_score"]["query"]["bool"]["must"] = []
+        aoss_query["query"]["bool"]["must"] = []
         for match in matches:
-            aoss_query["query"]["script_score"]["query"]["bool"]["must"].append(
+            aoss_query["query"]["bool"]["must"].append(
                 {
                     "multi_match": {
                         "query": match,
@@ -262,7 +262,7 @@ def searchByImage(aoss_index, client, user_query):
     return response
 
 
-MAX_CLIPSEARCH_RELEVANCE_THRESHOLD = 0.7
+MAX_CLIPSEARCH_RELEVANCE_THRESHOLD = 0.75
 
 
 def searchByClip(aoss_index, client, user_query):

@@ -130,7 +130,7 @@ def augment_detection_with_embeddings(bucket_images, jobId, shot_frames):
         response = client.search(body=query, index=jobId)
         hits = response["hits"]["hits"]
         for hit in hits:
-            if hit["_score"] >= 0.7:
+            if hit["_score"] >= 0.8:
                 public_figures = [
                     name.strip()
                     for name in hit["_source"]["frame_publicFigures"].split(",")
@@ -144,11 +144,10 @@ def augment_detection_with_embeddings(bucket_images, jobId, shot_frames):
                     name.strip()
                     for name in hit["_source"]["frame_privateFigures"].split(",")
                 ]
-                if len(private_figures) <= 3:
-                    for name in private_figures:
-                        if name:
-                            frame_privateFigures.add(name)
-                            shot_privateFigures.add(name)
+                for name in private_figures:
+                    if name:
+                        frame_privateFigures.add(name)
+                        shot_privateFigures.add(name)
 
         frame_publicFigures = from_set_to_str(frame_publicFigures)
         frame_privateFigures = from_set_to_str(frame_privateFigures)
@@ -217,12 +216,12 @@ def generate_shot_description(bucket_images, jobId, shot_frames, shot_transcript
         message["content"].append(
             {"image": {"format": "png", "source": {"bytes": image_content}}}
         )
-    
+
     messages = [message]
     inferenceConfig = {
         "maxTokens": 512,
     }
-    
+
     response = bedrock_client.converse(
         modelId=model_id, messages=messages, inferenceConfig=inferenceConfig
     )

@@ -42,7 +42,7 @@ def startCelebrityDetection(bucket_images, jobId, frames):
             }
         )
 
-        min_confidence = 80.0
+        min_confidence = 95.0
 
         celebrities = set()
 

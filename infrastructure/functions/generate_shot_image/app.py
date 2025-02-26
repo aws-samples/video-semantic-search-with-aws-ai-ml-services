@@ -44,35 +44,78 @@ def lambda_handler(event, context):
     }
 
 
-def generate_shot_image(jobId, bucket_shots, images, shot_id, border_size=5):
-    num_images = len(images)
-    grid_size = math.ceil(math.sqrt(num_images))
-    grid_width = grid_size * images[0].width
-    grid_height = grid_size * images[0].height
-    grid_image = Image.new("RGB", (grid_width, grid_height))
+def generate_shot_image(
+    jobId, bucket_shots, images, shot_id, border_size=5, layout="horizontal"
+):
+    if layout == "horizontal":
+        # Horizontal grid layout
+        grid_width = sum(image.width + border_size for image in images) - border_size
+        grid_height = max(image.height for image in images)
+        grid_image = Image.new("RGB", (grid_width, grid_height))
+        x_offset = 0
+        for image in images:
+            grid_image.paste(image, (x_offset, 0))
+            x_offset += image.width + border_size
+    else:  # tile layout
+        num_images = len(images)
+        grid_size = math.ceil(math.sqrt(num_images))
+        grid_width = grid_size * (images[0].width + border_size) - border_size
+        grid_height = grid_size * (images[0].height + border_size) - border_size
+        grid_image = Image.new("RGB", (grid_width, grid_height))
 
-    # for i, image in enumerate(images):
-    #     row = i // grid_size
-    #     col = i % grid_size
-    #     grid_image.paste(image, (col * image.width, row * image.height))
+        for i, image in enumerate(images):
+            row = i // grid_size
+            col = i % grid_size
+            grid_image.paste(
+                image,
+                (col * (image.width + border_size), row * (image.height + border_size)),
+            )
 
-    ## Horizontal grid ###
-    grid_width = sum(image.width + border_size for image in images) - border_size
-    grid_height = max(image.height for image in images)
-    grid_image = Image.new("RGB", (grid_width, grid_height))
-    x_offset = 0
-    for image in images:
-        grid_image.paste(image, (x_offset, 0))
-        x_offset += image.width + border_size
-
-    with io.BytesIO() as buffer:
-        grid_image.save(buffer, format="PNG")
-        buffer.seek(0)
-
-        image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
-        s3_client.upload_fileobj(
-            buffer,
-            bucket_shots,
-            f"{jobId}/{shot_id}.png",
-            ExtraArgs={"ContentType": "image/png"},
+    # Maximum resolution constraint (8000 x 8000)
+    max_dimension = 8000
+    if grid_image.width > max_dimension or grid_image.height > max_dimension:
+        scale_factor = min(
+            max_dimension / grid_image.width, max_dimension / grid_image.height
         )
+        new_width = int(grid_image.width * scale_factor)
+        new_height = int(grid_image.height * scale_factor)
+        grid_image = grid_image.resize((new_width, new_height), Image.LANCZOS)
+
+    # Max size allowed (3.75 MB)
+    max_size_bytes = 3.75 * 1024 * 1024
+
+    # Check initial size
+    buffer = io.BytesIO()
+    grid_image.save(buffer, format="PNG")
+    size = buffer.tell()
+
+    # If too large, resize the image
+    if size > max_size_bytes:
+        resize_factor = math.sqrt(max_size_bytes / size) * 0.9
+        new_width = int(grid_image.width * resize_factor)
+        new_height = int(grid_image.height * resize_factor)
+
+        grid_image = grid_image.resize((new_width, new_height), Image.LANCZOS)
+
+        buffer = io.BytesIO()
+        grid_image.save(buffer, format="PNG")
+        size = buffer.tell()
+
+        if size > max_size_bytes:
+            width, height = grid_image.size
+            while size > max_size_bytes:
+                width = int(width * 0.9)
+                height = int(height * 0.9)
+                grid_image = grid_image.resize((width, height), Image.LANCZOS)
+                buffer = io.BytesIO()
+                grid_image.save(buffer, format="PNG")
+                size = buffer.tell()
+
+    buffer.seek(0)
+    image_base64 = base64.b64encode(buffer.getvalue()).decode("utf-8")
+    s3_client.upload_fileobj(
+        buffer,
+        bucket_shots,
+        f"{jobId}/{shot_id}.png",
+        ExtraArgs={"ContentType": "image/png"},
+    )
