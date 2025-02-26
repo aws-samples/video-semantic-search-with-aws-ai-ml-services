@@ -785,6 +785,7 @@ Resources:
       Environment:
         Variables:
           bucket_videos: !Ref S3Videos
+          bucket_clip_search: !Ref S3ClipSearch
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -794,6 +795,7 @@ Resources:
                 - s3:PutObject
               Resource:
                 - !Sub arn:aws:s3:::${S3Videos}/*
+                - !Sub arn:aws:s3:::${S3ClipSearch}/*
       Events:
         HttpApiEvent:
           Type: HttpApi
@@ -1296,6 +1298,48 @@ Resources:
                 "aws:SecureTransport": False
             Principal: "*"
 
+  S3ClipSearch:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      CorsConfiguration:
+        CorsRules:
+          - AllowedHeaders:
+              - "*"
+            AllowedMethods:
+              - POST
+            AllowedOrigins:
+              - "*"
+            MaxAge: 300
+      LoggingConfiguration:
+        DestinationBucketName: !Ref S3Logging
+        LogFilePrefix: ClipSearch-logs/
+      BucketEncryption:
+        ServerSideEncryptionConfiguration:
+          - ServerSideEncryptionByDefault:
+              SSEAlgorithm: AES256
+
+  S3ClipSearchPolicy:
+    Type: AWS::S3::BucketPolicy
+    Properties:
+      Bucket: !Ref S3ClipSearch
+      PolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Deny
+            Action: s3:*
+            Resource:
+              - !GetAtt S3ClipSearch.Arn
+              - !Sub ${S3ClipSearch.Arn}/*
+            Condition:
+              Bool:
+                aws:SecureTransport: false
+            Principal: "*"
+
   SnsRekognition:
     Type: AWS::SNS::Topic
     Properties:
@@ -1424,15 +1468,19 @@ Resources:
       CodeUri: functions/search
       Layers:
         - !Ref OpensearchpyLambdaPackage
+        - !Ref FfmpegLambdaPackage
+      MemorySize: 5120
       Environment:
         Variables:
           region: !Ref AWS::Region
           bucket_videos: !Ref S3Videos
           bucket_images: !Ref S3Images
+          bucket_clip_search: !Ref S3ClipSearch
           bedrock_model: !Ref BedrockLlmSonnet35
           text_embedding_model: !Ref BedrockTextEmbeddingModel
           image_embedding_model: !Ref BedrockImageEmbeddingModel
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
+          tmp_dir: /tmp
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -1449,6 +1497,8 @@ Resources:
                 - !Sub ${S3Images.Arn}/*
                 - !GetAtt S3Videos.Arn
                 - !Sub ${S3Videos.Arn}/*
+                - !GetAtt S3ClipSearch.Arn
+                - !Sub ${S3ClipSearch.Arn}/*
             - Effect: Allow
               Action:
                 - dynamodb:Query

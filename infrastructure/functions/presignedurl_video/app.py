@@ -8,7 +8,8 @@ s3_client = boto3.client("s3")
 
 
 def lambda_handler(event, context):
-    bucket_name = os.environ["bucket_videos"]
+    bucket_videos = os.environ["bucket_videos"]
+    bucket_clip_search = os.environ["bucket_clip_search"]
     object_name = event["queryStringParameters"]["object_name"]
     content_type = get_content_type(object_name)
 
@@ -16,9 +17,11 @@ def lambda_handler(event, context):
         raise Exception("Unsupported image format")
 
     if event["queryStringParameters"]["type"] == "post":
-        response = create_presigned_post(bucket_name, object_name)
+        response = create_presigned_post(bucket_videos, object_name)
+    elif event["queryStringParameters"]["type"] == "clipsearch":
+        response = create_presigned_post(bucket_clip_search, object_name)
     else:  # get
-        response = create_presigned_url(bucket_name, object_name)
+        response = create_presigned_url(bucket_videos, object_name)
     if response is None:
         exit(1)
 

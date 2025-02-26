@@ -11,9 +11,16 @@
   transform: translate(-50%, -50%);
 }
 
-.input-image {
-  width: 30%;
-  margin-left: 35%;
+.upload-to-search-container {
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  width: 100%;
+}
+
+.input-image,
+.input-video {
+  width: 200px;
 }
 
 .jobs-table {

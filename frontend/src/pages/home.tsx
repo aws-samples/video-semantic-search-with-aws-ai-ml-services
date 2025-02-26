@@ -143,6 +143,21 @@ const Home = forwardRef((props, ref) => {
     reader.readAsDataURL(file);
   };
 
+  const handleSearchByClip = (files: string | any[]) => {
+    const file = files[0];
+    if (userId && file) {
+      setIsUploadDisabled(true);
+      uploadClipToSearch(
+        userId,
+        file,
+        setProgress,
+        setProgressInfo,
+        setIsUploadDisabled,
+        setSearching
+      );
+    }
+  };
+
   useEffect(() => {
     if (userId) {
       getAllJobs(addItem);
@@ -178,25 +193,48 @@ const Home = forwardRef((props, ref) => {
           placeholder="Search"
           type="search"
         />
-
-        <FormField className="input-image">
-          <FileUpload
-            onChange={({ detail }) => handleSearchByImage(detail.value)}
-            value={image}
-            accept=".jpeg, .jpg, .png"
-            i18nStrings={{
-              uploadButtonText: (e) =>
-                e ? "Search by images" : "Search by image",
-              dropzoneText: (e) =>
-                e ? "Drop files to upload" : "Drop file to upload",
-              removeFileAriaLabel: (e) => `Remove file ${e + 1}`,
-              limitShowFewer: "Show fewer files",
-              limitShowMore: "Show more files",
-              errorIconAriaLabel: "Error",
-            }}
-            constraintText=""
-          />
-        </FormField>
+        <div className="upload-to-search-container">
+          <div className="input-image">
+            <FormField>
+              <FileUpload
+                onChange={({ detail }) => handleSearchByImage(detail.value)}
+                value={image}
+                accept=".jpeg, .jpg, .png"
+                i18nStrings={{
+                  uploadButtonText: (e) =>
+                    e ? "Search by images" : "Search by image",
+                  dropzoneText: (e) =>
+                    e ? "Drop files to upload" : "Drop file to upload",
+                  removeFileAriaLabel: (e) => `Remove file ${e + 1}`,
+                  limitShowFewer: "Show fewer files",
+                  limitShowMore: "Show more files",
+                  errorIconAriaLabel: "Error",
+                }}
+                constraintText=""
+              />
+            </FormField>
+          </div>
+          <div className="input-clip">
+            <FormField>
+              <FileUpload
+                onChange={({ detail }) => handleSearchByClip(detail.value)}
+                value={image}
+                accept=".mp4"
+                i18nStrings={{
+                  uploadButtonText: (e) =>
+                    e ? "Search by clip" : "Search by clip",
+                  dropzoneText: (e) =>
+                    e ? "Drop files to upload" : "Drop file to upload",
+                  removeFileAriaLabel: (e) => `Remove file ${e + 1}`,
+                  limitShowFewer: "Show fewer files",
+                  limitShowMore: "Show more files",
+                  errorIconAriaLabel: "Error",
+                }}
+                constraintText=""
+              />
+            </FormField>
+          </div>
+        </div>
         <hr></hr>
         <Grid
           gridDefinition={[
@@ -651,10 +689,174 @@ function searchByImage(
   fetchData();
 }
 
+function uploadClipToSearch(
+  userId: string,
+  clipFile: File,
+  setProgress: {
+    (value: React.SetStateAction<number>): void;
+    (arg0: number): void;
+  },
+  setProgressInfo: {
+    (value: React.SetStateAction<string>): void;
+    (arg0: string): void;
+  },
+  setIsUploadDisabled: React.Dispatch<React.SetStateAction<boolean>>,
+  setSearching: {
+    (value: React.SetStateAction<boolean>): void;
+    (arg0: boolean): void;
+  }
+) {
+  setProgress(0);
+  setProgressInfo("Uploading clip to search...");
+  const clipFileName = userId + clipFile.name;
+  const allowedFilenameRegex = /^[a-zA-Z0-9._ -]+\.(mp4)$/;
+  function isValidFilename(filename: string): boolean {
+    return allowedFilenameRegex.test(filename);
+  }
+  const fetchData = async () => {
+    if (!clipFile || !isValidFilename(clipFileName)) {
+      setProgressInfo("No input file or invalid input filename");
+      setIsUploadDisabled(false);
+      return;
+    }
+    const response = await authenticatedAxios
+      .get(
+        AWS_API_URL +
+          "/presignedurl_video?type=clipsearch&object_name=" +
+          clipFileName
+      )
+      .then((response) => {
+        if (response.status == 200) {
+          var presignedUrl = response.data.url;
+          var fields = response.data.fields;
+          var key = fields["key"];
+          var AWSAccessKeyId = fields["AWSAccessKeyId"];
+          var xAmzSecurityToken = fields["x-amz-security-token"];
+          var policy = fields["policy"];
+          var signature = fields["signature"];
+
+          var formData = new FormData();
+          formData.append("key", key);
+          formData.append("AWSAccessKeyId", AWSAccessKeyId);
+          formData.append("x-amz-security-token", xAmzSecurityToken);
+          formData.append("policy", policy);
+          formData.append("signature", signature);
+          if (clipFile) formData.append("file", clipFile);
+
+          axios
+            .post(presignedUrl, formData, {
+              onUploadProgress: (progressEvent) => {
+                if (progressEvent.total) {
+                  const progress =
+                    (progressEvent.loaded / progressEvent.total) * 100;
+                  setProgress(progress);
+                }
+              },
+            })
+            .then((response) => {
+              if (response.status == 204) {
+                searchByClip(clipFileName, setSearching);
+                setIsUploadDisabled(false);
+              }
+            })
+            .catch((error) => {
+              console.error(error);
+            });
+        }
+      })
+      .catch((error) => {
+        console.error(error);
+      });
+  };
+  fetchData();
+}
+
+function searchByClip(
+  query: string,
+  setSearching: {
+    (value: React.SetStateAction<boolean>): void;
+    (arg0: boolean): void;
+  }
+) {
+  console.clear();
+  const videoContainer = document.getElementById("search");
+  if (!videoContainer) {
+    console.error("Video container not found");
+    return;
+  }
+  while (videoContainer.firstChild) {
+    videoContainer.removeChild(videoContainer.firstChild);
+  }
+  setSearching(true);
+  const uniqueTimestamps = new Set<string>();
+  const fetchData = async () => {
+    const response = await authenticatedAxios
+      .get(
+        AWS_API_URL +
+          "/search?type=clip&index=" +
+          aoss_index +
+          "&query=" +
+          query
+      )
+      .then((response) => {
+        setSearching(false);
+        if (response.status == 200) {
+          const results = response.data;
+          results.forEach((result: { [x: string]: string }) => {
+            let startTime = parseInt(result["shot_startTime"]);
+            let key = result["video_name"] + startTime;
+            if (!uniqueTimestamps.has(key)) {
+              const resultContainer = document.createElement("div");
+              resultContainer.className = "result-container";
+
+              const videoElement = document.createElement("video");
+              videoElement.controls = true;
+              getVideoUrl(result["video_name"], startTime, null, videoElement);
+              videoElement.style.width = "480px";
+              videoElement.style.height = "270px";
+              videoElement.style.borderRadius = "10px";
+              resultContainer.appendChild(videoElement);
+
+              const infoContainer = document.createElement("div");
+              infoContainer.className = "info-container";
+
+              const titleElement = document.createElement("h3");
+              titleElement.textContent = result["video_name"];
+              titleElement.className = "result-title";
+              infoContainer.appendChild(titleElement);
+
+              const shot_startTime = millisecondsToTimeFormat(startTime);
+
+              const infoElement = document.createElement("div");
+              infoElement.innerHTML = `
+      <p class="result-info"><strong>Timestamp:</strong></p>
+      <p class="result-info">Start: ${shot_startTime}</p>
+      <p class="result-info result-score">Relevance Score: ${parseFloat(
+        result["score"]
+      ).toFixed(2)}</p>
+    `;
+              infoContainer.appendChild(infoElement);
+
+              resultContainer.appendChild(infoContainer);
+              videoContainer.appendChild(resultContainer);
+
+              uniqueTimestamps.add(key);
+            }
+          });
+        } else {
+        }
+      })
+      .catch((error) => {
+        console.error(error);
+      });
+  };
+  fetchData();
+}
+
 function getVideoUrl(
   video_name: string,
   startTime: number,
-  endTime: number,
+  endTime: number | null,
   videoElement: HTMLVideoElement
 ) {
   const fetchData = async () => {
@@ -667,15 +869,16 @@ function getVideoUrl(
           var presignedUrl = response.data;
           videoElement.src = presignedUrl;
           videoElement.currentTime = (startTime + 1) / 1000;
-          const checkTime = () => {
-            if (videoElement.currentTime >= endTime / 1000) {
-              videoElement.pause();
-              videoElement.removeEventListener("timeupdate", checkTime);
-            }
-          };
-          videoElement.removeEventListener("timeupdate", checkTime);
-          videoElement.addEventListener("timeupdate", checkTime);
-
+          if (endTime != null) {
+            const checkTime = () => {
+              if (videoElement.currentTime >= endTime / 1000) {
+                videoElement.pause();
+                videoElement.removeEventListener("timeupdate", checkTime);
+              }
+            };
+            videoElement.removeEventListener("timeupdate", checkTime);
+            videoElement.addEventListener("timeupdate", checkTime);
+          }
           videoElement.load();
         }
       })
