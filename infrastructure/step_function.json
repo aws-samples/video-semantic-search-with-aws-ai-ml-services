@@ -33,6 +33,7 @@
                 }
               ],
               "End": true,
+              "TimeoutSeconds": 600,
               "ResultPath": "$.TranscribeParams"
             }
           }
@@ -103,9 +104,9 @@
                   "Lambda.SdkClientException",
                   "Lambda.TooManyRequestsException"
                 ],
-                "IntervalSeconds": 15,
-                "MaxAttempts": 20,
-                "BackoffRate": 1
+                "IntervalSeconds": 1,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
               }
             ],
             "Next": "Parallel (1)"
@@ -198,7 +199,7 @@
           }
         }
       },
-      "MaxConcurrency": 20,
+      "MaxConcurrency": 10,
       "Label": "VideoShots",
       "Next": "Video Shot (2)",
       "Catch": [
@@ -264,7 +265,7 @@
                 ],
                 "IntervalSeconds": 10,
                 "MaxAttempts": 3,
-                "BackoffRate": 2
+                "BackoffRate": 1
               }
             ],
             "End": true
@@ -273,7 +274,7 @@
       },
       "Next": "Notify completed job",
       "Label": "VideoShot2",
-      "MaxConcurrency": 50,
+      "MaxConcurrency": 20,
       "ItemsPath": "$",
       "ToleratedFailurePercentage": 2,
       "ResultPath": null,
@@ -324,8 +325,8 @@
             "Lambda.SdkClientException",
             "Lambda.TooManyRequestsException"
           ],
-          "IntervalSeconds": 2,
-          "MaxAttempts": 6,
+          "IntervalSeconds": 1,
+          "MaxAttempts": 3,
           "BackoffRate": 2
         }
       ],
