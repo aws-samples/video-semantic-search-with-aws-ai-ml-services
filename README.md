@@ -29,7 +29,7 @@ For further information, please refer to the links below:
 
 **AWS at IBC 2024:** [Video Semantic Search Demo at IBC 2024](https://aws.amazon.com/media/ibc24-demos/data-science-and-analytics-video-semantic-search/)
 
-**AWS at NAB 2024:** [Video Semantic Search Demo at NAB 2024](https://aws.amazon.com/media/nab24-demos/nab24-demos-data-science-and-analytics-video-semantic-search/)
+**AWS at NAB 2025:** [Video Semantic Search Demo at NAB 2025](https://aws.amazon.com/media/nab25-demos/video-semantic-search/)
 
 **AWS Solution Library:** [Guidance for Semantic Video Search on AWS](https://aws.amazon.com/solutions/guidance/semantic-video-search-on-aws/)
 
@@ -116,6 +116,10 @@ The solution currently supports the following query types:
 
 - Upload an image to find similar or related content.
 
+3. **Clip Search**
+
+- Upload a video clip to find the original source video that contains the clip.
+
 ![UI](assets/video-semantic-search-ui.gif "Video Semantic Search UI")
 
 ## Troubleshooting
@@ -129,6 +133,26 @@ If you encounter any issues during video indexing process, please consider the f
 3. **Bedrock Quotas:** Verify your Amazon Bedrock RPM (Requests Per Minute) and TPM (Tokens Per Minute) quotas for the specific models used in the solution. Insufficient quotas can lead to throttling or failures.
 
 4. **Model Availability:** Confirm that the foundation models required for this solution are available in your AWS region.
+
+## Clean Up
+
+Follow these steps to remove all resources created by this solution:
+
+1. **Empty S3 Buckets**
+
+   - Navigate to the S3 console, select the S3 buckets created by this solution (they will have names starting with `vss-`), then remove all objects in the buckets.
+   - Note: S3 buckets must be empty before they can be deleted by the SAM cleanup
+
+2. **Delete the Stack**
+   - Navigate to the `infrastructure` folder:
+     ```bash
+     cd infrastructure
+     ```
+   - Run the SAM delete command:
+     ```bash
+     sam delete
+     ```
+   - Follow the prompts to confirm the deletion
 
 ## Security
 

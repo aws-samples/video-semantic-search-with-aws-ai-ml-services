@@ -41,15 +41,20 @@ def lambda_handler(event, context):
 
 
 def get_subtitle(bucket_transcripts, transcript_filename):
-    subtitle = (
-        s3_client.get_object(Bucket=bucket_transcripts, Key=transcript_filename)["Body"]
-        .read()
-        .decode("utf-8-sig")
-    )
-    return subtitle
+    try:
+        subtitle = (
+            s3_client.get_object(Bucket=bucket_transcripts, Key=transcript_filename)["Body"]
+            .read()
+            .decode("utf-8-sig")
+        )
+        return subtitle
+    except Exception as e:
+        return "" 
 
 
 def process_transcript(s):
+    if s == "":
+        return []
     subtitle_blocks = re.findall(
         r"(\d+\n(\d{2}:\d{2}:\d{2},\d{3}) --> (\d{2}:\d{2}:\d{2},\d{3})\n(.*?)(?=\n\d+\n|\Z))",
         s,
