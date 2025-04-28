@@ -27,9 +27,9 @@ These following steps walk through the sequence of actions that enable video sem
 
 For further information, please refer to the links below:
 
-**AWS at IBC 2024:** [Video Semantic Search Demo at IBC 2024](https://aws.amazon.com/media/ibc24-demos/data-science-and-analytics-video-semantic-search/)
-
 **AWS at NAB 2025:** [Video Semantic Search Demo at NAB 2025](https://aws.amazon.com/media/nab25-demos/video-semantic-search/)
+
+**AWS at IBC 2024:** [Video Semantic Search Demo at IBC 2024](https://aws.amazon.com/media/ibc24-demos/data-science-and-analytics-video-semantic-search/)
 
 **AWS Solution Library:** [Guidance for Semantic Video Search on AWS](https://aws.amazon.com/solutions/guidance/semantic-video-search-on-aws/)
 
@@ -140,19 +140,24 @@ Follow these steps to remove all resources created by this solution:
 
 1. **Empty S3 Buckets**
 
-   - Navigate to the S3 console, select the S3 buckets created by this solution (they will have names starting with `vss-`), then remove all objects in the buckets.
-   - Note: S3 buckets must be empty before they can be deleted by the SAM cleanup
+- Navigate to the S3 console, select the S3 buckets created by the solution (they will have names starting with `vss-`), then remove all objects in the buckets.
+- Note: S3 buckets must be empty before they can be deleted by the SAM cleanup
 
 2. **Delete the Stack**
-   - Navigate to the `infrastructure` folder:
-     ```bash
-     cd infrastructure
-     ```
-   - Run the SAM delete command:
-     ```bash
-     sam delete
-     ```
-   - Follow the prompts to confirm the deletion
+
+- Navigate to the `infrastructure` folder:
+
+```bash
+cd infrastructure
+```
+
+- Run the SAM delete command:
+
+```bash
+sam delete
+```
+
+- Follow the prompts to confirm the deletion
 
 ## Security
 
