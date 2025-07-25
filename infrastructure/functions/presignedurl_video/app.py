@@ -4,7 +4,11 @@ import boto3
 from botocore.exceptions import ClientError
 import os
 
-s3_client = boto3.client("s3")
+# Configure S3 client to use regional endpoint
+s3_client = boto3.client("s3", region_name='us-west-2', config=boto3.session.Config(
+    s3={'addressing_style': 'virtual'},
+    region_name='us-west-2'
+))
 
 
 def lambda_handler(event, context):

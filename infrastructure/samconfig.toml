@@ -15,7 +15,7 @@ capabilities = "CAPABILITY_IAM CAPABILITY_AUTO_EXPAND"
 confirm_changeset = false
 resolve_s3 = true
 s3_prefix = "vss"
-region = "us-east-1"
+region = "us-west-2"
 image_repositories = []
 
 [default.package.parameters]
