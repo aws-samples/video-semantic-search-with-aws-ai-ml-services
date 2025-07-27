@@ -85,7 +85,7 @@ def create_opensearch_index(host, region, index, len_embedding):
         pool_maxsize=20,
     )
 
-    exist = client.indices.exists(index)
+    exist = client.indices.exists(index=index)
     if not exist:
         print("Creating index")
         index_body = {
@@ -140,7 +140,7 @@ def create_opensearch_index(host, region, index, len_embedding):
                 }
             },
         }
-        response = client.indices.create(index, body=index_body)
+        response = client.indices.create(index=index, body=index_body)
 
     return client
 
@@ -159,7 +159,7 @@ def create_shot_collection(host, region, index, len_embedding):
         pool_maxsize=20,
     )
 
-    exist = client.indices.exists(index)
+    exist = client.indices.exists(index=index)
     if not exist:
         print("Creating index")
         index_body = {
@@ -192,6 +192,6 @@ def create_shot_collection(host, region, index, len_embedding):
                 }
             },
         }
-        response = client.indices.create(index, body=index_body)
+        response = client.indices.create(index=index, body=index_body)
 
     return client
