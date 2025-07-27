@@ -99,6 +99,17 @@ The deployment can take approximately 5-10 minutes.
 
 The authenication is managed by Amazon Cognito. You will need to create a new user to be able to login.
 
+### Email Domain Restriction
+
+The application supports restricting user registration to specific email domains. This is configured through the `AllowedEmailDomains` parameter in the CloudFormation template. By default, it allows "amazon.com" and "example.com" domains.
+
+To modify the allowed domains:
+
+1. Edit the `AllowedEmailDomains` parameter in `infrastructure/template.yaml`
+2. Redeploy the application using the deployment steps above
+
+If the parameter is left empty, all email domains will be allowed.
+
 ### Login to your new web application
 
 Once complete, the CLI output will show a value for the CloudFront URL to be able to view the web application, e.g. `https://d123abc.cloudfront.net/`
