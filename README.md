@@ -101,7 +101,7 @@ The authenication is managed by Amazon Cognito. You will need to create a new us
 
 ### Email Domain Restriction
 
-The application supports restricting user registration to specific email domains. This is configured through the `AllowedEmailDomains` parameter in the CloudFormation template. By default, it allows "amazon.com" and "example.com" domains.
+The application supports restricting user registration to specific email domains. This is configured through the `AllowedEmailDomains` parameter in the CloudFormation template. By default, it allows "amazon.com" domain.
 
 To modify the allowed domains:
 
