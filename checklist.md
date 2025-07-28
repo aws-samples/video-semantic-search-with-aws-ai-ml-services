@@ -10,6 +10,6 @@
 
 ## Deployment Steps
 
-- [ ] Deploy CloudFormation stack using SAM
-- [ ] Test user registration with allowed domain
-- [ ] Test user registration with non-allowed domain
+- [x] Deploy CloudFormation stack using SAM
+- [x] Test user registration with allowed domain
+- [x] Test user registration with non-allowed domain
