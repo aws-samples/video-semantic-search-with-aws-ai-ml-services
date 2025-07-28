@@ -3,6 +3,10 @@ AWSTemplateFormatVersion: 2010-09-09
 Transform: AWS::Serverless-2016-10-31
 
 Parameters:
+  AllowedEmailDomains:
+    Type: CommaDelimitedList
+    Description: List of allowed email domains for Cognito user registration (e.g., amazon.com,example.com)
+    Default: "amazon.com"
   AossVectorIndex:
     Type: String
     Description: Amazon OpenSearch Serverless Vector Index
@@ -1638,6 +1642,44 @@ Resources:
               StringEquals:
                 "AWS:SourceArn": !Sub arn:${AWS::Partition}:cloudfront::${AWS::AccountId}:distribution/*
 
+
+  CognitoDomainValidator:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/cognito_domain_validator
+      Environment:
+        Variables:
+          ALLOWED_DOMAINS: !Join [",", !Ref AllowedEmailDomains]
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - logs:CreateLogGroup
+                - logs:CreateLogStream
+                - logs:PutLogEvents
+              Resource: !Sub arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*
+
+  CognitoDomainValidatorLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${CognitoDomainValidator}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  CognitoDomainValidatorPermission:
+    Type: AWS::Lambda::Permission
+    Properties:
+      Action: lambda:InvokeFunction
+      FunctionName: !GetAtt CognitoDomainValidator.Arn
+      Principal: cognito-idp.amazonaws.com
+      SourceArn: !GetAtt VssCognito.Arn
+
   VssOac:
     Type: AWS::CloudFront::OriginAccessControl
     Properties:
@@ -1706,6 +1748,8 @@ Resources:
           RequireNumbers: True
           RequireSymbols: True
           TemporaryPasswordValidityDays: 1
+      LambdaConfig:
+        PreSignUp: !GetAtt CognitoDomainValidator.Arn
 
   VssCognitoUserPoolClient:
     Type: AWS::Cognito::UserPoolClient
