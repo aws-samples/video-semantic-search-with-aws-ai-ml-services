@@ -43,6 +43,6 @@ def delete_shot_collection(host, region, index):
         pool_maxsize=20,
     )
 
-    exist = client.indices.exists(index)
+    exist = client.indices.exists(index=index)
     if exist:
         response = client.indices.delete(index=index)

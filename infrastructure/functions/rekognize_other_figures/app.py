@@ -8,9 +8,12 @@ import time
 import base64
 from botocore.config import Config
 
-config = Config(read_timeout=900)
+config = Config(read_timeout=900, retries = {
+      'max_attempts': 20,
+      'mode': 'standard'
+   })
 
-bedrock_client = boto3.client(service_name="bedrock-runtime")
+bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
 s3_client = boto3.client("s3")
 
 
@@ -38,7 +41,9 @@ def lambda_handler(event, context):
 
 def recognise_person_name(bucket_images, jobId, frames):
     shot_frames = []
-    prompt = f"""Analyze this image and identify any person names present.
+    prompt = f"""Analyze this image and identify person names that are displayed as identification for individuals (such as name plates, interview chyrons, or captions).
+
+        Focus only on names that clearly identify people in the image. Ignore names that appear incidentally on background objects, signs, books, or other text.
 
         OUTPUT FORMAT REQUIREMENTS (STRICT):
         - Return ONLY a comma-separated list of names with no titles OR the exact phrase "No names recognized"
@@ -48,13 +53,15 @@ def recognise_person_name(bucket_images, jobId, frames):
         - No additional text whatsoever
 
         Examples of CORRECT responses:
-        - "John Smith, Jane Doe, Robert Johnson"
-        - "No names recognized"
+        - John Smith, Jane Doe, Robert Johnson
+        - Roy Kean
+        - No names recognized
 
         Examples of INCORRECT responses:
-        - "The image shows Mr. John Smith"
-        - "I can see people but cannot identify names"
-        - "The image contains Jane Doe in a park setting"
+        - The image shows Mr. John Smith
+        - Dr. Roy Kean
+        - I can see people but cannot identify names
+        - The image contains Jane Doe in a park setting
     """
 
     model_id = os.environ["bedrock_model"]

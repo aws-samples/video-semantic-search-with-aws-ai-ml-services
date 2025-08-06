@@ -86,7 +86,7 @@ const FlyingCircle = styled.div`
   }
 `;
 
-var aoss_index = "vss-index";
+// var aoss_visual_index = "vss-visual-index";
 
 const Home = forwardRef((props, ref) => {
   // console.log(import.meta.env);
@@ -493,13 +493,7 @@ function search(
   const uniqueTimestamps = new Set<string>();
   const fetchData = async () => {
     const response = await authenticatedAxios
-      .get(
-        AWS_API_URL +
-          "/search?type=text&index=" +
-          aoss_index +
-          "&query=" +
-          query
-      )
+      .get(AWS_API_URL + "/search?type=text&query=" + query)
       .then((response) => {
         setSearching(false);
         if (response.status == 200) {
@@ -551,10 +545,10 @@ function search(
               const additionalInfo = document.createElement("div");
               additionalInfo.className = "additional-info";
               additionalInfo.innerHTML = `
-      <p><strong>Public Figures:</strong> ${
+      <p><strong>Predicted Public Figures:</strong> ${
         result["shot_publicFigures"] || "None"
       }</p>
-      <p><strong>Private Figures:</strong> ${
+      <p><strong>Predicted Private Individuals:</strong> ${
         result["shot_privateFigures"] || "None"
       }</p>
       <p><strong>Transcript:</strong> ${
@@ -604,7 +598,6 @@ function searchByImage(
     const response = await authenticatedAxios
       .post(AWS_API_URL + "/search", {
         type: "image",
-        index: aoss_index,
         query: query,
       })
       .then((response) => {
@@ -791,13 +784,7 @@ function searchByClip(
   const uniqueTimestamps = new Set<string>();
   const fetchData = async () => {
     const response = await authenticatedAxios
-      .get(
-        AWS_API_URL +
-          "/search?type=clip&index=" +
-          aoss_index +
-          "&query=" +
-          query
-      )
+      .get(AWS_API_URL + "/search?type=clip&query=" + query)
       .then((response) => {
         setSearching(false);
         if (response.status == 200) {

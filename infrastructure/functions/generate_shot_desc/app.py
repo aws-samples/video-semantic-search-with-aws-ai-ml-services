@@ -8,12 +8,15 @@ import time
 import base64
 from botocore.config import Config
 from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
-
-config = Config(read_timeout=900)
 import re
 
+config = Config(read_timeout=900, retries = {
+      'max_attempts': 20,
+      'mode': 'standard'
+   })
+
 dynamodb_client = boto3.resource("dynamodb")
-bedrock_client = boto3.client(service_name="bedrock-runtime")
+bedrock_client = boto3.client(service_name="bedrock-runtime", config=config)
 s3_client = boto3.client("s3")
 
 
@@ -92,7 +95,19 @@ def augment_detection_with_embeddings(bucket_images, jobId, shot_frames):
             return ""
         else:
             return ", ".join(str)
+    # Collect all direct detections
+    for index, value in enumerate(shot_frames):
+        for name in value["frame_publicFigures"].split(","):
+            name = name.strip()
+            if name:
+                shot_publicFigures.add(name)
 
+        for name in value["frame_privateFigures"].split(","):
+            name = name.strip()
+            if name and name not in shot_publicFigures:
+                shot_privateFigures.add(name)
+
+    # Augment with embeddings
     for index, value in enumerate(shot_frames):
         frame_publicFigures = set()
         frame_privateFigures = set()
@@ -100,13 +115,11 @@ def augment_detection_with_embeddings(bucket_images, jobId, shot_frames):
             name = name.strip()
             if name:
                 frame_publicFigures.add(name)
-                shot_publicFigures.add(name)
 
         for name in value["frame_privateFigures"].split(","):
             name = name.strip()
-            if name:
+            if name and name not in frame_publicFigures:
                 frame_privateFigures.add(name)
-                shot_privateFigures.add(name)
 
         embedding = get_titan_image_embedding(
             bucket_images,
@@ -136,18 +149,18 @@ def augment_detection_with_embeddings(bucket_images, jobId, shot_frames):
                     for name in hit["_source"]["frame_publicFigures"].split(",")
                 ]
                 for name in public_figures:
-                    if name:
-                        frame_publicFigures.add(name)
-                        shot_publicFigures.add(name)
+                    if name and name not in shot_publicFigures:
+                        frame_publicFigures.add(name + "*")
+                        shot_publicFigures.add(name + "*")
 
                 private_figures = [
                     name.strip()
                     for name in hit["_source"]["frame_privateFigures"].split(",")
                 ]
                 for name in private_figures:
-                    if name:
-                        frame_privateFigures.add(name)
-                        shot_privateFigures.add(name)
+                    if name and name not in shot_privateFigures and name not in shot_publicFigures:
+                        frame_privateFigures.add(name + "*")
+                        shot_privateFigures.add(name + "*")
 
         frame_publicFigures = from_set_to_str(frame_publicFigures)
         frame_privateFigures = from_set_to_str(frame_privateFigures)

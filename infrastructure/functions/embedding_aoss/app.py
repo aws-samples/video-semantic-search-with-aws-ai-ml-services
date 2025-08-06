@@ -35,7 +35,7 @@ def lambda_handler(event, context):
         os.environ["text_embedding_model"], shot_transcript
     )
 
-    embedding_request_body = json.dumps(
+    aoss_request_body = json.dumps(
         {
             "jobId": jobId,
             "video_name": video_name,
@@ -56,8 +56,8 @@ def lambda_handler(event, context):
     client = get_opensearch_client(os.environ["aoss_host"], os.environ["region"])
 
     response = client.index(
-        index=os.environ["aoss_index"],
-        body=embedding_request_body,
+        index=os.environ["aoss_visual_index"],
+        body=aoss_request_body,
         params={"timeout": 60},
     )
 
