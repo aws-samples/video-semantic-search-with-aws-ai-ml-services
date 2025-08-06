@@ -3,10 +3,14 @@ AWSTemplateFormatVersion: 2010-09-09
 Transform: AWS::Serverless-2016-10-31
 
 Parameters:
-  AossVectorIndex:
+  AossVectorVisualIndex:
     Type: String
-    Description: Amazon OpenSearch Serverless Vector Index
-    Default: vss-index
+    Description: Amazon OpenSearch Serverless Vector Index for Shot
+    Default: vss-visual-index
+  AossVectorAudioIndex:
+    Type: String
+    Description: Amazon OpenSearch Serverless Vector Index for Transcript/Audio
+    Default: vss-audio-index
   BedrockTextEmbeddingModel:
     Type: String
     Description: Bedrock Text Embedding Model
@@ -23,14 +27,6 @@ Parameters:
     Type: Number
     Description: Bedrock Image Embedding Dimension
     Default: 1024
-  BedrockLlmSonnet3:
-    Type: String
-    Description: Bedrock Large Language Model
-    Default: us.anthropic.claude-3-sonnet-20240229-v1:0
-  BedrockLlmSonnet35:
-    Type: String
-    Description: Bedrock Large Language Model
-    Default: us.anthropic.claude-3-5-sonnet-20241022-v2:0
   BedrockLlmNova:
     Type: String
     Description: Bedrock Large Language Model
@@ -39,6 +35,10 @@ Parameters:
     Type: String
     Description: Bedrock Large Language Model
     Default: us.anthropic.claude-3-7-sonnet-20250219-v1:0
+  BedrockLlmSonnet4:
+    Type: String
+    Description: Bedrock Large Language Model
+    Default: us.anthropic.claude-sonnet-4-20250514-v1:0
 
 Globals:
   Function:
@@ -146,7 +146,8 @@ Resources:
               "${EmbeddingAossRole.Arn}",
               "${CompletedJobRole.Arn}",
               "${FailedJobRole.Arn}",
-              "${SearchRole.Arn}"
+              "${SearchRole.Arn}",
+              "${EventbridgeTranscribeRole.Arn}"
             ]
           }
         ]
@@ -347,7 +348,8 @@ Resources:
           sqs_queue_url: !GetAtt Sqs.QueueUrl
           vss_dynamodb_table: !Ref DynamodbTable
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
-          aoss_index: !Ref AossVectorIndex
+          aoss_visual_index: !Ref AossVectorVisualIndex
+          aoss_audio_index: !Ref AossVectorAudioIndex
           text_embedding_dimension: !Ref BedrockTextEmbeddingDimension
           image_embedding_dimension: !Ref BedrockImageEmbeddingDimension
       Policies:
@@ -483,7 +485,8 @@ Resources:
           text_embedding_model: !Ref BedrockTextEmbeddingModel
           image_embedding_model: !Ref BedrockImageEmbeddingModel
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
-          aoss_index: !Ref AossVectorIndex
+          aoss_visual_index: !Ref AossVectorVisualIndex
+          aoss_audio_index: !Ref AossVectorAudioIndex
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -529,10 +532,17 @@ Resources:
             reason: VPC not required
     Properties:
       CodeUri: functions/eventbridge_transcribe
+      Layers:
+        - !Ref OpensearchpyLambdaPackage
       Environment:
         Variables:
+          region: !Ref AWS::Region
           bucket_transcripts: !Ref S3Transcripts
           vss_dynamodb_table: !Ref DynamodbTable
+          text_embedding_model: !Ref BedrockTextEmbeddingModel
+          aoss_host: !GetAtt VssCollection.CollectionEndpoint
+          aoss_visual_index: !Ref AossVectorVisualIndex
+          aoss_audio_index: !Ref AossVectorAudioIndex
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -565,6 +575,18 @@ Resources:
                 - kms:GenerateDataKey*
                 - kms:DescribeKey
               Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel*
+              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*
+            - Effect: Allow
+              Action:
+                - aoss:APIAccessAll
+                - aoss:Create*
+                - aoss:Update*
+                - aoss:Get*
+                - aoss:List*
+              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
       Events:
         EventBridge:
           Type: EventBridgeRule
@@ -720,7 +742,7 @@ Resources:
                 - !Sub arn:aws:s3:::${S3Shots}/*
                 - !Sub arn:aws:s3:::${S3Images}/*
       Layers:
-        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-Pillow:2"
+        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-pillow:2"
 
   GenerateShotImageLogGroup:
     Type: AWS::Logs::LogGroup
@@ -1480,10 +1502,12 @@ Resources:
           bucket_videos: !Ref S3Videos
           bucket_images: !Ref S3Images
           bucket_clip_search: !Ref S3ClipSearch
-          bedrock_model: !Ref BedrockLlmSonnet37
+          bedrock_model: !Ref BedrockLlmSonnet4
           text_embedding_model: !Ref BedrockTextEmbeddingModel
           image_embedding_model: !Ref BedrockImageEmbeddingModel
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
+          aoss_visual_index: !Ref AossVectorVisualIndex
+          aoss_audio_index: !Ref AossVectorAudioIndex
           tmp_dir: /tmp
       Policies:
         - Version: 2012-10-17

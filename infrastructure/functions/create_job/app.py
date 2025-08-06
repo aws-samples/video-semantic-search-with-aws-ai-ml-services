@@ -49,10 +49,20 @@ def lambda_handler(event, context):
     }
 
     try:
-        create_opensearch_index(
+        create_visual_index(
             os.environ["aoss_host"],
             os.environ["region"],
-            os.environ["aoss_index"],
+            os.environ["aoss_visual_index"],
+            os.environ["text_embedding_dimension"],
+        )
+    except Exception as e:
+        logging.error(f"An error occurred: {e}")
+
+    try:
+        create_audio_index(
+            os.environ["aoss_host"],
+            os.environ["region"],
+            os.environ["aoss_audio_index"],
             os.environ["text_embedding_dimension"],
         )
     except Exception as e:
@@ -71,7 +81,7 @@ def lambda_handler(event, context):
     return {"statusCode": 200, "body": json.dumps(response)}
 
 
-def create_opensearch_index(host, region, index, len_embedding):
+def create_visual_index(host, region, index, len_embedding):
     host = host.split("://")[1] if "://" in host else host
     credentials = boto3.Session().get_credentials()
     auth = AWSV4SignerAuth(credentials, region, "aoss")
@@ -85,9 +95,9 @@ def create_opensearch_index(host, region, index, len_embedding):
         pool_maxsize=20,
     )
 
-    exist = client.indices.exists(index)
+    exist = client.indices.exists(index=index)
     if not exist:
-        print("Creating index")
+        print("Creating visual index")
         index_body = {
             "mappings": {
                 "properties": {
@@ -140,7 +150,57 @@ def create_opensearch_index(host, region, index, len_embedding):
                 }
             },
         }
-        response = client.indices.create(index, body=index_body)
+        response = client.indices.create(index=index, body=index_body)
+
+    return client
+
+def create_audio_index(host, region, index, len_embedding):
+    host = host.split("://")[1] if "://" in host else host
+    credentials = boto3.Session().get_credentials()
+    auth = AWSV4SignerAuth(credentials, region, "aoss")
+
+    client = OpenSearch(
+        hosts=[{"host": host, "port": 443}],
+        http_auth=auth,
+        use_ssl=True,
+        verify_certs=True,
+        connection_class=RequestsHttpConnection,
+        pool_maxsize=20,
+    )
+
+    exist = client.indices.exists(index=index)
+    if not exist:
+        print("Creating audio index")
+        index_body = {
+            "mappings": {
+                "properties": {
+                    "jobId": {"type": "text"},
+                    "video_name": {"type": "text"},
+                    "transcript_id": {"type": "text"},
+                    "transcript_startTime": {"type": "text"},
+                    "transcript_endTime": {"type": "text"},
+                    "transcript": {"type": "text"},
+                    "transcript_vector": {
+                        "type": "knn_vector",
+                        "dimension": len_embedding,
+                        "method": {
+                            "engine": "nmslib",
+                            "space_type": "cosinesimil",
+                            "name": "hnsw",
+                            "parameters": {"ef_construction": 512, "m": 16},
+                        },
+                    },
+                }
+            },
+            "settings": {
+                "index": {
+                    "number_of_shards": 2,
+                    "knn.algo_param": {"ef_search": 512},
+                    "knn": True,
+                }
+            },
+        }
+        response = client.indices.create(index=index, body=index_body)
 
     return client
 
@@ -159,9 +219,9 @@ def create_shot_collection(host, region, index, len_embedding):
         pool_maxsize=20,
     )
 
-    exist = client.indices.exists(index)
+    exist = client.indices.exists(index=index)
     if not exist:
-        print("Creating index")
+        print("Creating temporary shot collection index")
         index_body = {
             "mappings": {
                 "properties": {
@@ -192,6 +252,6 @@ def create_shot_collection(host, region, index, len_embedding):
                 }
             },
         }
-        response = client.indices.create(index, body=index_body)
+        response = client.indices.create(index=index, body=index_body)
 
     return client

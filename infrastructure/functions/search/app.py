@@ -20,27 +20,27 @@ comprehend_client = boto3.client("comprehend")
 def lambda_handler(event, context):
     http_method = event.get("requestContext", {}).get("http", {}).get("method", "GET")
     if http_method == "GET":
-        aoss_index = event["queryStringParameters"]["index"]
+        aoss_visual_index = os.environ["aoss_visual_index"]
         client = get_opensearch_client(
-            os.environ["aoss_host"], os.environ["region"], aoss_index
+            os.environ["aoss_host"], os.environ["region"], aoss_visual_index
         )
         query_type = event["queryStringParameters"]["type"]
         user_query = event["queryStringParameters"]["query"]
         if query_type == "text":  # search by text
-            response = searchByText(aoss_index, client, user_query)
+            response = searchByText(aoss_visual_index, client, user_query)
         else:  # search by clip
-            response = searchByClip(aoss_index, client, user_query)
+            response = searchByClip(aoss_visual_index, client, user_query)
     else:  # search by image
         request_data = json.loads(event["body"])
-        aoss_index = request_data["index"]
+        aoss_visual_index = os.environ["aoss_visual_index"]
         client = get_opensearch_client(
-            os.environ["aoss_host"], os.environ["region"], aoss_index
+            os.environ["aoss_host"], os.environ["region"], aoss_visual_index
         )
         query_type = request_data["type"]
         user_query = request_data["query"]
         if user_query.startswith("data:image"):
             user_query = user_query.split(",")[1]
-        response = searchByImage(aoss_index, client, user_query)
+        response = searchByImage(aoss_visual_index, client, user_query)
 
     return {"statusCode": 200, "body": json.dumps(response)}
 
@@ -51,7 +51,7 @@ MAX_RERANK_RESULTS = 50
 RERANK_RELEVANCE_THRESHOLD = 0.05
 
 
-def searchByText(aoss_index, client, user_query):
+def searchByText(aoss_visual_index, client, user_query):
     query_embedding = get_text_embedding(os.environ["text_embedding_model"], user_query)
 
     aoss_query = {
@@ -126,7 +126,7 @@ def searchByText(aoss_index, client, user_query):
                 }
             )
 
-    response = client.search(body=aoss_query, index=aoss_index)
+    response = client.search(body=aoss_query, index=aoss_visual_index)
     hits = response["hits"]["hits"]
     unranked_results = []
     for hit in hits:
@@ -217,8 +217,49 @@ def get_opensearch_client(host, region, index):
 
     return client
 
+# Reserved For future use
+def searchByTextWithAudio(aoss_audio_index, client, user_query):
+    text_embedding = get_text_embedding(
+        os.environ["text_embedding_model"], user_query
+    )
 
-def searchByImage(aoss_index, client, user_query):
+    aoss_query = {
+        "size": 50,
+        "query": {"knn": {"transcript_vector": {"vector": text_embedding, "k": 50}}},
+        "_source": [
+            "jobId",
+            "video_name",
+            "transcript_id",
+            "transcript_startTime",
+            "transcript_endTime",
+            "transcript"
+        ],
+    }
+
+    response = client.search(body=aoss_query, index=aoss_audio_index)
+    hits = response["hits"]["hits"]
+    response = []
+    for hit in hits:
+        if hit["_score"] >= 0:  # Set score threshold
+            # Temporary response to follow search-with-shot format
+            response.append(
+                {
+                    "jobId": hit["_source"]["jobId"],
+                    "video_name": hit["_source"]["video_name"],
+                    "shot_id": hit["_source"]["transcript_id"],
+                    "shot_startTime": hit["_source"]["transcript_startTime"],
+                    "shot_endTime": hit["_source"]["transcript_endTime"],
+                    "shot_description": hit["_source"]["transcript"],
+                    "shot_publicFigures": "",
+                    "shot_privateFigures": "",
+                    "shot_transcript": hit["_source"]["transcript"],
+                    "score": hit["_score"],
+                }
+            )
+
+    return response
+
+def searchByImage(aoss_visual_index, client, user_query):
     image_embedding = get_titan_image_embedding(
         os.environ["image_embedding_model"], user_query
     )
@@ -239,7 +280,7 @@ def searchByImage(aoss_index, client, user_query):
         ],
     }
 
-    response = client.search(body=aoss_query, index=aoss_index)
+    response = client.search(body=aoss_query, index=aoss_visual_index)
     hits = response["hits"]["hits"]
     response = []
     for hit in hits:
@@ -265,7 +306,7 @@ def searchByImage(aoss_index, client, user_query):
 MAX_CLIPSEARCH_RELEVANCE_THRESHOLD = 0.75
 
 
-def searchByClip(aoss_index, client, user_query):
+def searchByClip(aoss_visual_index, client, user_query):
     tmp_clip_dir = os.environ["tmp_dir"] + "/clip/"
     tmp_frames_dir = os.environ["tmp_dir"] + "/" + user_query + "/"
     os.makedirs(tmp_clip_dir, exist_ok=True)
@@ -308,7 +349,7 @@ def searchByClip(aoss_index, client, user_query):
 
             for future in as_completed(future_to_frame):
                 base64_image = future.result()
-                frame_search_res = searchByImage(aoss_index, client, base64_image)
+                frame_search_res = searchByImage(aoss_visual_index, client, base64_image)
                 all_frame_search_res.append(frame_search_res)
 
         # Aggregate results
