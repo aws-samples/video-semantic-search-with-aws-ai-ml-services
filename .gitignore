@@ -6,3 +6,4 @@ crash.*.log
 
 .DS_Store
 .aws-sam
+CLAUDE.md
