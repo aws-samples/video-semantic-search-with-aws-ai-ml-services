@@ -34,19 +34,20 @@ def lambda_handler(event, context):
     )
 
     client = get_opensearch_client(os.environ["aoss_host"], os.environ["region"])
+    embedding_model = os.environ["embedding_model"]
 
     for sentence in processed_transcript:
         aoss_request_body = json.dumps(
-        {
-            "jobId": jobId,
-            "video_name": item["Input"],
-            "transcript_id": f"{sentence["sentence_startTime"] - sentence["sentence_endTime"]}",
-            "transcript_startTime": sentence["sentence_startTime"],
-            "transcript_endTime": sentence["sentence_endTime"],
-            "transcript": sentence["sentence"],
-            "transcript_vector": get_text_embedding(os.environ["text_embedding_model"], sentence["sentence"])
-        }
-    )
+            {
+                "jobId": jobId,
+                "video_name": item["Input"],
+                "transcript_id": f"{sentence['sentence_startTime']}-{sentence['sentence_endTime']}",
+                "transcript_startTime": sentence["sentence_startTime"],
+                "transcript_endTime": sentence["sentence_endTime"],
+                "transcript": sentence["sentence"],
+                "transcript_vector": get_text_embedding(embedding_model, sentence["sentence"]),
+            }
+        )
         response = client.index(
             index=os.environ["aoss_audio_index"],
             body=aoss_request_body,
@@ -63,15 +64,12 @@ def lambda_handler(event, context):
 
 
 def get_subtitle(bucket_transcripts, transcript_filename):
-    try:
-        subtitle = (
-            s3_client.get_object(Bucket=bucket_transcripts, Key=transcript_filename)["Body"]
-            .read()
-            .decode("utf-8-sig")
-        )
-        return subtitle
-    except Exception as e:
-        return "" 
+    subtitle = (
+        s3_client.get_object(Bucket=bucket_transcripts, Key=transcript_filename)["Body"]
+        .read()
+        .decode("utf-8-sig")
+    )
+    return subtitle
 
 
 def process_transcript(s):
@@ -131,6 +129,7 @@ def time_to_ms(time_str):
     h, m, s, ms = re.split(":|,", time_str)
     return int(h) * 3600000 + int(m) * 60000 + int(s) * 1000 + int(ms)
 
+
 def get_opensearch_client(host, region):
     host = host.split("://")[1] if "://" in host else host
     credentials = boto3.Session().get_credentials()
@@ -147,30 +146,27 @@ def get_opensearch_client(host, region):
 
     return client
 
-def get_text_embedding(text_embedding_model, text):
-    accept = "application/json"
-    content_type = "application/json"
-    if text_embedding_model.startswith("amazon.titan-embed-text"):
-        body = json.dumps({"inputText": text, "dimensions": 1024, "normalize": True})
-        response = bedrock_client.invoke_model(
-            body=body,
-            modelId=text_embedding_model,
-            accept=accept,
-            contentType=content_type,
-        )
-        response_body = json.loads(response["body"].read())
-        embedding = response_body.get("embedding")
-    else:
-        if len(text) > 2048:
-            text = text[:2048]
-        body = json.dumps({"texts": [text], "input_type": "search_document"})
-        response = bedrock_client.invoke_model(
-            body=body,
-            modelId=text_embedding_model,
-            accept=accept,
-            contentType=content_type,
-        )
-        response_body = json.loads(response["body"].read())
-        embedding = response_body.get("embeddings")[0]
 
+def get_text_embedding(embedding_model, text):
+    body = json.dumps(
+        {
+            "taskType": "SINGLE_EMBEDDING",
+            "singleEmbeddingParams": {
+                "embeddingPurpose": "GENERIC_INDEX",
+                "embeddingDimension": 3072,
+                "text": {
+                    "truncationMode": "END",
+                    "value": text,
+                },
+            },
+        }
+    )
+    response = bedrock_client.invoke_model(
+        body=body,
+        modelId=embedding_model,
+        accept="application/json",
+        contentType="application/json",
+    )
+    response_body = json.loads(response["body"].read())
+    embedding = response_body["embeddings"][0]["embedding"]
     return embedding

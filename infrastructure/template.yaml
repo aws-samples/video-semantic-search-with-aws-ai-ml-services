@@ -11,34 +11,34 @@ Parameters:
     Type: String
     Description: Amazon OpenSearch Serverless Vector Index for Transcript/Audio
     Default: vss-audio-index
-  BedrockTextEmbeddingModel:
+  BedrockEmbeddingModel:
     Type: String
-    Description: Bedrock Text Embedding Model
-    Default: cohere.embed-english-v3
-  BedrockTextEmbeddingDimension:
+    Description: Nova Multimodal Embedding v2 model for text, image, and video
+    Default: amazon.nova-2-multimodal-embeddings-v1:0
+  BedrockEmbeddingDimension:
     Type: Number
-    Description: Bedrock Text Embedding Dimension
-    Default: 1024
-  BedrockImageEmbeddingModel:
+    Description: Embedding vector dimension
+    Default: 3072
+  BedrockLlm:
     Type: String
-    Description: Bedrock Image Embedding Model
-    Default: amazon.titan-embed-image-v1
-  BedrockImageEmbeddingDimension:
+    Description: Bedrock LLM for shot description generation
+    Default: us.anthropic.claude-sonnet-4-6
+  BedrockRerankModel:
+    Type: String
+    Description: Bedrock Rerank Model
+    Default: cohere.rerank-v3-5:0
+  BedrockQueryLlm:
+    Type: String
+    Description: Bedrock LLM for search query analysis and reranking
+    Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
+  NeptuneGraphMemory:
     Type: Number
-    Description: Bedrock Image Embedding Dimension
-    Default: 1024
-  BedrockLlmNova:
+    Description: Neptune Analytics graph memory in GB
+    Default: 16
+  FaceCollectionId:
     Type: String
-    Description: Bedrock Large Language Model
-    Default: us.amazon.nova-pro-v1:0
-  BedrockLlmSonnet37:
-    Type: String
-    Description: Bedrock Large Language Model
-    Default: us.anthropic.claude-3-7-sonnet-20250219-v1:0
-  BedrockLlmSonnet4:
-    Type: String
-    Description: Bedrock Large Language Model
-    Default: us.anthropic.claude-sonnet-4-20250514-v1:0
+    Description: Rekognition Face Collection ID
+    Default: vss-global-faces
 
 Globals:
   Function:
@@ -46,11 +46,11 @@ Globals:
     Timeout: 600
     MemorySize: 512
     Runtime: python3.12
-    # ReservedConcurrentExecutions: 10
     Handler: app.lambda_handler
     KmsKeyArn: !GetAtt VssKmsKey.Arn
 
 Resources:
+  # ==================== OpenSearch Serverless ====================
   VssSecurityPolicy:
     Type: AWS::OpenSearchServerless::SecurityPolicy
     Properties:
@@ -85,7 +85,7 @@ Resources:
       Policy: !Sub |
         [
           {
-            "Description": "Publics access for collection endpoint",
+            "Description": "Public access for collection endpoint",
             "Rules": [
               {
                 "ResourceType": "collection",
@@ -140,18 +140,31 @@ Resources:
               }
             ],
             "Principal": [
-              "${CreateJobRole.Arn}",
-              "${CreateShotCollectionRole.Arn}",
-              "${GenerateShotDescRole.Arn}",
-              "${EmbeddingAossRole.Arn}",
-              "${CompletedJobRole.Arn}",
+              "${InitJobRole.Arn}",
+              "${IngestDataRole.Arn}",
+              "${FinalizeJobRole.Arn}",
               "${FailedJobRole.Arn}",
               "${SearchRole.Arn}",
-              "${EventbridgeTranscribeRole.Arn}"
+              "${EventbridgeTranscribeRole.Arn}",
+              "${AdminUpdateMetadataRole.Arn}",
+              "${AdminDeleteJobRole.Arn}",
+              "${AdminLabelFaceRole.Arn}",
+              "${AdminDeleteFaceRole.Arn}"
             ]
           }
         ]
 
+  # ==================== Neptune Analytics ====================
+  NeptuneGraph:
+    Type: AWS::NeptuneGraph::Graph
+    Properties:
+      GraphName: !Sub vss-graph-${AWS::AccountId}
+      ProvisionedMemory: !Ref NeptuneGraphMemory
+      PublicConnectivity: true
+      ReplicaCount: 0
+      DeletionProtection: false
+
+  # ==================== KMS ====================
   VssKmsKey:
     Type: AWS::KMS::Key
     Properties:
@@ -189,6 +202,7 @@ Resources:
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
+  # ==================== API Gateway ====================
   ApiVss:
     Type: AWS::Serverless::HttpApi
     Properties:
@@ -200,6 +214,7 @@ Resources:
           - "POST"
           - "OPTIONS"
           - "PUT"
+          - "DELETE"
         AllowHeaders:
           - "content-type"
           - "Authorization"
@@ -218,6 +233,7 @@ Resources:
             IdentitySource: "$request.header.Authorization"
         DefaultAuthorizer: CognitoAuthorizer
 
+  # ==================== DynamoDB ====================
   DynamodbTable:
     Type: AWS::DynamoDB::Table
     Properties:
@@ -260,6 +276,7 @@ Resources:
           Projection:
             ProjectionType: ALL
 
+  # ==================== Lambda Layers ====================
   OpensearchpyLambdaPackage:
     Type: AWS::Serverless::LayerVersion
     Metadata:
@@ -280,7 +297,10 @@ Resources:
       CompatibleRuntimes:
         - python3.12
 
-  CompletedJob:
+  # ==================== Pipeline Lambda Functions ====================
+
+  # --- init_job ---
+  InitJob:
     Type: AWS::Serverless::Function
     Metadata:
       cfn_nag:
@@ -288,24 +308,35 @@ Resources:
           - id: W89
             reason: VPC not required
     Properties:
-      CodeUri: functions/completedjob
+      CodeUri: functions/init_job
       Layers:
         - !Ref OpensearchpyLambdaPackage
       Environment:
         Variables:
-          vss_dynamodb_table: !Ref DynamodbTable
           region: !Ref AWS::Region
+          vss_dynamodb_table: !Ref DynamodbTable
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
+          aoss_visual_index: !Ref AossVectorVisualIndex
+          aoss_audio_index: !Ref AossVectorAudioIndex
+          embedding_dimension: !Ref BedrockEmbeddingDimension
       Policies:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
               Action:
                 - dynamodb:Query
-                - dynamodb:Update*
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
               Resource:
                 - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
                 - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
+            - Effect: Allow
+              Action:
+                - neptune-graph:ReadDataViaQuery
+                - neptune-graph:WriteDataViaQuery
+                - neptune-graph:DeleteDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
             - Effect: Allow
               Action:
                 - aoss:APIAccessAll
@@ -323,13 +354,14 @@ Resources:
                 - kms:DescribeKey
               Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
 
-  CompletedJobLogGroup:
+  InitJobLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${CompletedJob}
+      LogGroupName: !Sub /aws/lambda/${InitJob}
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
+  # --- CreateJob (API-triggered) ---
   CreateJob:
     Type: AWS::Serverless::Function
     Metadata:
@@ -339,19 +371,12 @@ Resources:
             reason: VPC not required
     Properties:
       CodeUri: functions/create_job
-      Layers:
-        - !Ref OpensearchpyLambdaPackage
       Environment:
         Variables:
           region: !Ref AWS::Region
           bucket_videos: !Ref S3Videos
           sqs_queue_url: !GetAtt Sqs.QueueUrl
           vss_dynamodb_table: !Ref DynamodbTable
-          aoss_host: !GetAtt VssCollection.CollectionEndpoint
-          aoss_visual_index: !Ref AossVectorVisualIndex
-          aoss_audio_index: !Ref AossVectorAudioIndex
-          text_embedding_dimension: !Ref BedrockTextEmbeddingDimension
-          image_embedding_dimension: !Ref BedrockImageEmbeddingDimension
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -377,14 +402,6 @@ Resources:
                 - kms:GenerateDataKey*
                 - kms:DescribeKey
               Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
-            - Effect: Allow
-              Action:
-                - aoss:APIAccessAll
-                - aoss:Create*
-                - aoss:Update*
-                - aoss:Get*
-                - aoss:List*
-              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
             - Effect: Allow
               Action:
                 - sqs:SendMessage
@@ -406,7 +423,8 @@ Resources:
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
-  CreateShotCollection:
+  # --- Transcribe ---
+  Transcribe:
     Type: AWS::Serverless::Function
     Metadata:
       cfn_nag:
@@ -414,79 +432,12 @@ Resources:
           - id: W89
             reason: VPC not required
     Properties:
-      CodeUri: functions/create_shot_collection
-      Layers:
-        - !Ref OpensearchpyLambdaPackage
+      CodeUri: functions/transcribe
       Environment:
         Variables:
-          region: !Ref AWS::Region
           bucket_videos: !Ref S3Videos
-          bucket_shots: !Ref S3Shots
-          bucket_images: !Ref S3Images
-          aoss_host: !GetAtt VssCollection.CollectionEndpoint
-          image_embedding_model: !Ref BedrockImageEmbeddingModel
-          image_embedding_dimension: !Ref BedrockImageEmbeddingDimension
-      Policies:
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - bedrock:InvokeModel*
-              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*
-            - Effect: Allow
-              Action:
-                - s3:GetObject
-                - s3:PutObject
-              Resource:
-                - !Sub arn:aws:s3:::${S3Videos}/*
-                - !Sub arn:aws:s3:::${S3Shots}/*
-                - !Sub arn:aws:s3:::${S3Images}/*
-            - Effect: Allow
-              Action:
-                - dynamodb:Query
-                - dynamodb:Update*
-                - dynamodb:Put*
-              Resource:
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
-            - Effect: Allow
-              Action:
-                - aoss:APIAccessAll
-                - aoss:Create*
-                - aoss:Update*
-                - aoss:Get*
-                - aoss:List*
-              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
-
-  CreateShotCollectionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub /aws/lambda/${CreateShotCollection}
-      KmsKeyId: !GetAtt VssKmsKey.Arn
-      RetentionInDays: 365
-
-  EmbeddingAoss:
-    Type: AWS::Serverless::Function
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: VPC not required
-    Properties:
-      CodeUri: functions/embedding_aoss
-      Layers:
-        - !Ref OpensearchpyLambdaPackage
-      Environment:
-        Variables:
-          region: !Ref AWS::Region
-          bucket_videos: !Ref S3Videos
-          bucket_shots: !Ref S3Shots
-          bucket_images: !Ref S3Images
-          text_embedding_model: !Ref BedrockTextEmbeddingModel
-          image_embedding_model: !Ref BedrockImageEmbeddingModel
-          aoss_host: !GetAtt VssCollection.CollectionEndpoint
-          aoss_visual_index: !Ref AossVectorVisualIndex
-          aoss_audio_index: !Ref AossVectorAudioIndex
+          bucket_transcripts: !Ref S3Transcripts
+          vss_dynamodb_table: !Ref DynamodbTable
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -494,35 +445,32 @@ Resources:
               Action:
                 - s3:GetObject
                 - s3:PutObject
-              Resource:
-                - !Sub arn:aws:s3:::${S3Videos}/*
-                - !Sub arn:aws:s3:::${S3Shots}/*
-                - !Sub arn:aws:s3:::${S3Images}/*
+              Resource: arn:aws:s3:::*/*
             - Effect: Allow
               Action:
-                - bedrock:InvokeModel*
-              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*
+                - dynamodb:UpdateItem
+              Resource: arn:aws:dynamodb:*
             - Effect: Allow
               Action:
-                - aoss:APIAccessAll
-                - aoss:Create*
-                - aoss:Update*
-                - aoss:Get*
-                - aoss:List*
-              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+                - transcribe:StartTranscriptionJob
+              Resource: arn:aws:transcribe:*
             - Effect: Allow
               Action:
-                - iam:GetRole
-                - iam:PassRole
-              Resource: !GetAtt SnsRekognitionRole.Arn
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:ReEncrypt*
+                - kms:GenerateDataKey*
+                - kms:DescribeKey
+              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
 
-  EmbeddingAossLogGroup:
+  TranscribeLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${EmbeddingAoss}
+      LogGroupName: !Sub /aws/lambda/${Transcribe}
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
+  # --- EventbridgeTranscribe ---
   EventbridgeTranscribe:
     Type: AWS::Serverless::Function
     Metadata:
@@ -539,7 +487,7 @@ Resources:
           region: !Ref AWS::Region
           bucket_transcripts: !Ref S3Transcripts
           vss_dynamodb_table: !Ref DynamodbTable
-          text_embedding_model: !Ref BedrockTextEmbeddingModel
+          embedding_model: !Ref BedrockEmbeddingModel
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
           aoss_visual_index: !Ref AossVectorVisualIndex
           aoss_audio_index: !Ref AossVectorAudioIndex
@@ -608,7 +556,8 @@ Resources:
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
-  FailedJob:
+  # --- RekognitionShotDetection ---
+  RekognitionShotDetection:
     Type: AWS::Serverless::Function
     Metadata:
       cfn_nag:
@@ -616,35 +565,40 @@ Resources:
           - id: W89
             reason: VPC not required
     Properties:
-      CodeUri: functions/failedjob
-      Layers:
-        - !Ref OpensearchpyLambdaPackage
+      CodeUri: functions/rekognition_shot_detection
       Environment:
         Variables:
+          bucket_videos: !Ref S3Videos
           vss_dynamodb_table: !Ref DynamodbTable
-          region: !Ref AWS::Region
-          aoss_host: !GetAtt VssCollection.CollectionEndpoint
+          vss_sns_rekognition_topic_arn: !Ref SnsRekognition
+          vss_sns_rekognition_role: !GetAtt SnsRekognitionRole.Arn
       Policies:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
               Action:
+                - rekognition:StartSegmentDetection
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub ${S3Videos.Arn}/*
+            - Effect: Allow
+              Action:
                 - dynamodb:Query
-                - dynamodb:UpdateItem
+                - dynamodb:Update*
+                - dynamodb:Put*
+                - dynamodb:Scan
               Resource:
                 - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
                 - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
-        - Version: 2012-10-17
-          Statement:
             - Effect: Allow
               Action:
-                - aoss:APIAccessAll
-                - aoss:Create*
-                - aoss:Update*
-                - aoss:Get*
-                - aoss:List*
-                - aoss:Delete*
-              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+                - iam:GetRole
+                - iam:PassRole
+              Resource: !GetAtt SnsRekognitionRole.Arn
             - Effect: Allow
               Action:
                 - kms:Encrypt
@@ -654,13 +608,284 @@ Resources:
                 - kms:DescribeKey
               Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
 
-  FailedJobLogGroup:
+  RekognitionShotDetectionLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${FailedJob}
+      LogGroupName: !Sub /aws/lambda/${RekognitionShotDetection}
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
+  # --- RekognitionShotDetectionSns ---
+  RekognitionShotDetectionSns:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/rekognition_shot_detection_sns
+      Layers:
+        - !Ref FfmpegLambdaPackage
+      MemorySize: 5120
+      Timeout: 900
+      EphemeralStorage:
+        Size: 10240
+      Environment:
+        Variables:
+          vss_dynamodb_table: !Ref DynamodbTable
+          SNSTopic: !Ref SnsRekognition
+          bucket_videos: !Ref S3Videos
+          bucket_images: !Ref S3Images
+          bucket_shots: !Ref S3Shots
+          tmp_dir: /tmp
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - states:SendTaskSuccess
+              Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*
+            - Effect: Allow
+              Action:
+                - rekognition:*SegmentDetection*
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - s3:Get*
+                - s3:PutObject
+                - s3:List*
+              Resource:
+                - !Sub arn:aws:s3:::${S3Videos}/*
+                - !Sub arn:aws:s3:::${S3Images}/*
+                - !Sub arn:aws:s3:::${S3Shots}/*
+                - !Sub arn:aws:s3:::${S3Videos}
+                - !Sub arn:aws:s3:::${S3Images}
+                - !Sub arn:aws:s3:::${S3Shots}
+
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:Update*
+                - dynamodb:Put*
+                - dynamodb:Scan
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
+            - Effect: Allow
+              Action:
+                - sns:Publish
+              Resource: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:*
+            - Effect: Allow
+              Action:
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:ReEncrypt*
+                - kms:GenerateDataKey*
+                - kms:DescribeKey
+              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+      Events:
+        Sns:
+          Type: SNS
+          Properties:
+            Topic: !Ref SnsRekognition
+
+  RekognitionShotDetectionSnsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${RekognitionShotDetectionSns}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # --- IntervalSegmentation ---
+  IntervalSegmentation:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/interval_segmentation
+      Layers:
+        - !Ref FfmpegLambdaPackage
+      MemorySize: 2048
+      EphemeralStorage:
+        Size: 10240
+      Environment:
+        Variables:
+          bucket_videos: !Ref S3Videos
+          tmp_dir: /tmp
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+              Resource:
+                - !Sub arn:aws:s3:::${S3Videos}/*
+
+  IntervalSegmentationLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${IntervalSegmentation}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # --- ExtractFrames ---
+  ExtractFrames:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/extract_frames
+      Layers:
+        - !Ref FfmpegLambdaPackage
+        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-pillow:2"
+      MemorySize: 10240
+      Timeout: 900
+      EphemeralStorage:
+        Size: 10240
+      Environment:
+        Variables:
+          bucket_videos: !Ref S3Videos
+          bucket_images: !Ref S3Images
+          bucket_shots: !Ref S3Shots
+          tmp_dir: /tmp
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub arn:aws:s3:::${S3Videos}/*
+                - !Sub arn:aws:s3:::${S3Images}/*
+                - !Sub arn:aws:s3:::${S3Shots}/*
+
+  ExtractFramesLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ExtractFrames}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # --- RekognitionCelebrityDetection ---
+  RekognitionCelebrityDetection:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/rekognition_celebrity_detection
+      Environment:
+        Variables:
+          bucket_videos: !Ref S3Videos
+          bucket_shots: !Ref S3Shots
+          bucket_images: !Ref S3Images
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - rekognition:StartCelebrityRecognition
+                - rekognition:RecognizeCelebrities
+                - rekognition:DetectFaces
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub arn:aws:s3:::${S3Videos}/*
+                - !Sub arn:aws:s3:::${S3Shots}/*
+                - !Sub arn:aws:s3:::${S3Images}/*
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:Update*
+                - dynamodb:Put*
+                - dynamodb:Scan
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
+            - Effect: Allow
+              Action:
+                - iam:GetRole
+                - iam:PassRole
+              Resource: !GetAtt SnsRekognitionRole.Arn
+
+  RekognitionCelebrityDetectionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${RekognitionCelebrityDetection}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # --- FaceCollection ---
+  FaceCollection:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/face_collection
+      Layers:
+        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-pillow:2"
+      MemorySize: 2048
+      EphemeralStorage:
+        Size: 10240
+      Environment:
+        Variables:
+          bucket_images: !Ref S3Images
+          face_collection_id: !Ref FaceCollectionId
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+          region: !Ref AWS::Region
+          vss_dynamodb_table: !Ref DynamodbTable
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - rekognition:SearchFacesByImage
+                - rekognition:IndexFaces
+                - rekognition:CreateCollection
+                - rekognition:DescribeCollection
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub arn:aws:s3:::${S3Images}/*
+            - Effect: Allow
+              Action:
+                - neptune-graph:ReadDataViaQuery
+                - neptune-graph:WriteDataViaQuery
+                - neptune-graph:DeleteDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
+
+  FaceCollectionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${FaceCollection}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # --- GenerateShotDesc ---
   GenerateShotDesc:
     Type: AWS::Serverless::Function
     Metadata:
@@ -670,8 +895,6 @@ Resources:
             reason: VPC not required
     Properties:
       CodeUri: functions/generate_shot_desc
-      Layers:
-        - !Ref OpensearchpyLambdaPackage
       Environment:
         Variables:
           region: !Ref AWS::Region
@@ -679,9 +902,7 @@ Resources:
           bucket_shots: !Ref S3Shots
           bucket_images: !Ref S3Images
           bucket_transcripts: !Ref S3Transcripts
-          aoss_host: !GetAtt VssCollection.CollectionEndpoint
-          bedrock_llm: !Ref BedrockLlmSonnet37
-          image_embedding_model: !Ref BedrockImageEmbeddingModel
+          bedrock_llm: !Ref BedrockLlm
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -700,14 +921,6 @@ Resources:
               Resource:
                 - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
                 - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
-            - Effect: Allow
-              Action:
-                - aoss:APIAccessAll
-                - aoss:Create*
-                - aoss:Update*
-                - aoss:Get*
-                - aoss:List*
-              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
 
   GenerateShotDescLogGroup:
     Type: AWS::Logs::LogGroup
@@ -716,7 +929,8 @@ Resources:
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
-  GenerateShotImage:
+  # --- IngestData ---
+  IngestData:
     Type: AWS::Serverless::Function
     Metadata:
       cfn_nag:
@@ -724,12 +938,21 @@ Resources:
           - id: W89
             reason: VPC not required
     Properties:
-      CodeUri: functions/generate_shot_image
+      CodeUri: functions/ingest_data
+      Layers:
+        - !Ref OpensearchpyLambdaPackage
+      MemorySize: 2048
       Environment:
         Variables:
+          region: !Ref AWS::Region
           bucket_videos: !Ref S3Videos
-          bucket_images: !Ref S3Images
           bucket_shots: !Ref S3Shots
+          bucket_images: !Ref S3Images
+          embedding_model: !Ref BedrockEmbeddingModel
+          aoss_host: !GetAtt VssCollection.CollectionEndpoint
+          aoss_visual_index: !Ref AossVectorVisualIndex
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+          vss_dynamodb_table: !Ref DynamodbTable
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -741,16 +964,328 @@ Resources:
                 - !Sub arn:aws:s3:::${S3Videos}/*
                 - !Sub arn:aws:s3:::${S3Shots}/*
                 - !Sub arn:aws:s3:::${S3Images}/*
-      Layers:
-        - !Sub "arn:aws:lambda:${AWS::Region}:770693421928:layer:Klayers-p312-pillow:2"
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel*
+              Resource: !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}::foundation-model/*
+            - Effect: Allow
+              Action:
+                - aoss:APIAccessAll
+                - aoss:Create*
+                - aoss:Update*
+                - aoss:Get*
+                - aoss:List*
+              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+            - Effect: Allow
+              Action:
+                - neptune-graph:ReadDataViaQuery
+                - neptune-graph:WriteDataViaQuery
+                - neptune-graph:DeleteDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+            - Effect: Allow
+              Action:
+                - dynamodb:UpdateItem
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
 
-  GenerateShotImageLogGroup:
+  IngestDataLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${GenerateShotImage}
+      LogGroupName: !Sub /aws/lambda/${IngestData}
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
+  # --- ConsolidateMapResults ---
+  ConsolidateMapResults:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/consolidate_map_results
+      Timeout: 300
+      MemorySize: 512
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:PutObject
+              Resource:
+                - !Sub ${S3Images.Arn}/*
+            - Effect: Allow
+              Action:
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:ReEncrypt*
+                - kms:GenerateDataKey*
+                - kms:DescribeKey
+              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+
+  ConsolidateMapResultsLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${ConsolidateMapResults}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # --- FinalizeJob ---
+  FinalizeJob:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/finalize_job
+      Environment:
+        Variables:
+          vss_dynamodb_table: !Ref DynamodbTable
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+          region: !Ref AWS::Region
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:Update*
+                - dynamodb:GetItem
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
+            - Effect: Allow
+              Action:
+                - neptune-graph:ReadDataViaQuery
+                - neptune-graph:WriteDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+            - Effect: Allow
+              Action:
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:ReEncrypt*
+                - kms:GenerateDataKey*
+                - kms:DescribeKey
+              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+
+  FinalizeJobLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${FinalizeJob}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # --- FailedJob ---
+  FailedJob:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/failedjob
+      Environment:
+        Variables:
+          vss_dynamodb_table: !Ref DynamodbTable
+          region: !Ref AWS::Region
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:UpdateItem
+                - dynamodb:GetItem
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - neptune-graph:ReadDataViaQuery
+                - neptune-graph:WriteDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+            - Effect: Allow
+              Action:
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:ReEncrypt*
+                - kms:GenerateDataKey*
+                - kms:DescribeKey
+              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+
+  FailedJobLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${FailedJob}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # --- StepFunction trigger ---
+  StepFunction:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/stepfunction
+      Environment:
+        Variables:
+          StepFunction: !Ref StateMachine
+          vss_dynamodb_table: !Ref DynamodbTable
+          sqs_queue_url: !GetAtt Sqs.QueueUrl
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - states:StartExecution
+              Resource:
+                - !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*
+            - Effect: Allow
+              Action:
+                - sqs:SendMessage
+                - sqs:DeleteMessage
+                - sqs:GetQueueAttributes
+              Resource: !GetAtt Sqs.Arn
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:Update*
+                - dynamodb:Put*
+                - dynamodb:Scan
+                - dynamodb:GetItem
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
+            - Effect: Allow
+              Action:
+                - kms:Encrypt
+                - kms:Decrypt
+                - kms:ReEncrypt*
+                - kms:GenerateDataKey*
+                - kms:DescribeKey
+              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt Sqs.Arn
+            BatchSize: 1
+            Enabled: True
+
+  StepFunctionLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${StepFunction}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # ==================== Search ====================
+  Search:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/search
+      Layers:
+        - !Ref OpensearchpyLambdaPackage
+        - !Ref FfmpegLambdaPackage
+      MemorySize: 5120
+      Environment:
+        Variables:
+          region: !Ref AWS::Region
+          bucket_videos: !Ref S3Videos
+          bucket_images: !Ref S3Images
+          bucket_clip_search: !Ref S3ClipSearch
+          embedding_model: !Ref BedrockEmbeddingModel
+          rerank_model: !Ref BedrockRerankModel
+          query_llm_model: !Ref BedrockQueryLlm
+          aoss_host: !GetAtt VssCollection.CollectionEndpoint
+          aoss_visual_index: !Ref AossVectorVisualIndex
+          aoss_audio_index: !Ref AossVectorAudioIndex
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+          tmp_dir: /tmp
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - s3:GetObject
+                - s3:ListBucket
+              Resource:
+                - !GetAtt S3Images.Arn
+                - !Sub ${S3Images.Arn}/*
+                - !GetAtt S3Videos.Arn
+                - !Sub ${S3Videos.Arn}/*
+                - !GetAtt S3ClipSearch.Arn
+                - !Sub ${S3ClipSearch.Arn}/*
+            - Effect: Allow
+              Action:
+                - dynamodb:Query
+                - dynamodb:Update*
+                - dynamodb:Put*
+                - dynamodb:Scan
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel*
+              Resource:
+                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
+                - !Sub arn:${AWS::Partition}:bedrock:${AWS::Region}:${AWS::AccountId}:inference-profile/*
+            - Effect: Allow
+              Action:
+                - bedrock:Rerank
+              Resource: "*"
+            - Effect: Allow
+              Action:
+                - aoss:APIAccessAll
+                - aoss:Create*
+                - aoss:Update*
+                - aoss:Get*
+                - aoss:List*
+              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+            - Effect: Allow
+              Action:
+                - neptune-graph:ReadDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+
+      Events:
+        HttpApiEventGet:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiVss
+            Path: /search
+            Method: GET
+        HttpApiEventPost:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiVss
+            Path: /search
+            Method: POST
+
+  SearchLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${Search}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  # ==================== Job Management ====================
   GetAllJobs:
     Type: AWS::Serverless::Function
     Metadata:
@@ -837,7 +1372,9 @@ Resources:
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
-  RekognitionCelebrityDetection:
+  # ==================== Admin Lambda Functions ====================
+
+  AdminGetShots:
     Type: AWS::Serverless::Function
     Metadata:
       cfn_nag:
@@ -845,132 +1382,41 @@ Resources:
           - id: W89
             reason: VPC not required
     Properties:
-      CodeUri: functions/rekognition_celebrity_detection
+      CodeUri: functions/admin_get_shots
       Environment:
         Variables:
-          bucket_videos: !Ref S3Videos
-          bucket_shots: !Ref S3Shots
           bucket_images: !Ref S3Images
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+          region: !Ref AWS::Region
       Policies:
         - Version: 2012-10-17
           Statement:
-            - Effect: Allow
-              Action:
-                - rekognition:StartCelebrityRecognition
-                - rekognition:RecognizeCelebrities
-              Resource: "*"
             - Effect: Allow
               Action:
                 - s3:GetObject
-                - s3:PutObject
               Resource:
-                - !Sub arn:aws:s3:::${S3Videos}/*
-                - !Sub arn:aws:s3:::${S3Shots}/*
-                - !Sub arn:aws:s3:::${S3Images}/*
+                - !GetAtt S3Images.Arn
+                - !Sub ${S3Images.Arn}/*
             - Effect: Allow
               Action:
-                - dynamodb:Query
-                - dynamodb:Update*
-                - dynamodb:Put*
-                - dynamodb:Scan
-              Resource:
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
-            - Effect: Allow
-              Action:
-                - iam:GetRole
-                - iam:PassRole
-              Resource: !GetAtt SnsRekognitionRole.Arn
-
-  RekognitionCelebrityDetectionLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub /aws/lambda/${RekognitionCelebrityDetection}
-      KmsKeyId: !GetAtt VssKmsKey.Arn
-      RetentionInDays: 365
-
-  RekognitionShotDetectionSns:
-    Type: AWS::Serverless::Function
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: VPC not required
-    Properties:
-      CodeUri: functions/rekognition_shot_detection_sns
-      Layers:
-        - !Ref FfmpegLambdaPackage
-      MemorySize: 5120
-      Timeout: 900
-      EphemeralStorage:
-        Size: 10240
-      Environment:
-        Variables:
-          vss_dynamodb_table: !Ref DynamodbTable
-          SNSTopic: !Ref SnsRekognition
-          bucket_videos: !Ref S3Videos
-          bucket_images: !Ref S3Images
-          bucket_shots: !Ref S3Shots
-          tmp_dir: /tmp
-      Policies:
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - states:SendTaskSuccess
-              Resource: !Sub arn:aws:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*
-            - Effect: Allow
-              Action:
-                - rekognition:*SegmentDetection*
-              Resource: "*"
-            - Effect: Allow
-              Action:
-                - s3:Get*
-                - s3:PutObject
-                - s3:List*
-              Resource:
-                - !Sub arn:aws:s3:::${S3Videos}/*
-                - !Sub arn:aws:s3:::${S3Images}/*
-                - !Sub arn:aws:s3:::${S3Shots}/*
-                - !Sub arn:aws:s3:::${S3Videos}
-                - !Sub arn:aws:s3:::${S3Images}
-                - !Sub arn:aws:s3:::${S3Shots}
-
-            - Effect: Allow
-              Action:
-                - dynamodb:Query
-                - dynamodb:Update*
-                - dynamodb:Put*
-                - dynamodb:Scan
-              Resource:
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
-            - Effect: Allow
-              Action:
-                - sns:Publish
-              Resource: !Sub arn:aws:sns:${AWS::Region}:${AWS::AccountId}:*
-            - Effect: Allow
-              Action:
-                - kms:Encrypt
-                - kms:Decrypt
-                - kms:ReEncrypt*
-                - kms:GenerateDataKey*
-                - kms:DescribeKey
-              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+                - neptune-graph:ReadDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
       Events:
-        Sns:
-          Type: SNS
+        HttpApiEvent:
+          Type: HttpApi
           Properties:
-            Topic: !Ref SnsRekognition
+            ApiId: !Ref ApiVss
+            Path: /admin/jobs/{jobId}/shots
+            Method: GET
 
-  RekognitionShotDetectionSnsLogGroup:
+  AdminGetShotsLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${RekognitionShotDetectionSns}
+      LogGroupName: !Sub /aws/lambda/${AdminGetShots}
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
-  RekognitionShotDetection:
+  AdminUpdateMetadata:
     Type: AWS::Serverless::Function
     Metadata:
       cfn_nag:
@@ -978,57 +1424,140 @@ Resources:
           - id: W89
             reason: VPC not required
     Properties:
-      CodeUri: functions/rekognition_shot_detection
+      CodeUri: functions/admin_update_metadata
+      Layers:
+        - !Ref OpensearchpyLambdaPackage
       Environment:
         Variables:
-          bucket_videos: !Ref S3Videos
-          vss_dynamodb_table: !Ref DynamodbTable
-          vss_sns_rekognition_topic_arn: !Ref SnsRekognition
-          vss_sns_rekognition_role: !GetAtt SnsRekognitionRole.Arn
+          aoss_host: !GetAtt VssCollection.CollectionEndpoint
+          aoss_visual_index: !Ref AossVectorVisualIndex
+          region: !Ref AWS::Region
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+          embedding_model: !Ref BedrockEmbeddingModel
       Policies:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
               Action:
-                - rekognition:StartSegmentDetection
+                - aoss:APIAccessAll
+                - aoss:Create*
+                - aoss:Update*
+                - aoss:Get*
+                - aoss:List*
+              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+            - Effect: Allow
+              Action:
+                - neptune-graph:ReadDataViaQuery
+                - neptune-graph:WriteDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+            - Effect: Allow
+              Action:
+                - bedrock:InvokeModel
               Resource: "*"
+      Events:
+        HttpApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiVss
+            Path: /admin/shots/{shotId}/metadata
+            Method: PUT
+
+  AdminUpdateMetadataLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AdminUpdateMetadata}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  AdminDeleteJob:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/admin_delete_job
+      Layers:
+        - !Ref OpensearchpyLambdaPackage
+      Environment:
+        Variables:
+          aoss_host: !GetAtt VssCollection.CollectionEndpoint
+          aoss_visual_index: !Ref AossVectorVisualIndex
+          aoss_audio_index: !Ref AossVectorAudioIndex
+          region: !Ref AWS::Region
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+          vss_dynamodb_table: !Ref DynamodbTable
+          bucket_shots: !Ref S3Shots
+          bucket_images: !Ref S3Images
+          bucket_transcripts: !Ref S3Transcripts
+          bucket_videos: !Ref S3Videos
+          face_collection_id: !Ref FaceCollectionId
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - aoss:APIAccessAll
+                - aoss:Create*
+                - aoss:Update*
+                - aoss:Get*
+                - aoss:List*
+                - aoss:Delete*
+              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+            - Effect: Allow
+              Action:
+                - neptune-graph:ReadDataViaQuery
+                - neptune-graph:WriteDataViaQuery
+                - neptune-graph:DeleteDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+            - Effect: Allow
+              Action:
+                - dynamodb:GetItem
+                - dynamodb:UpdateItem
+                - dynamodb:DeleteItem
+              Resource:
+                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
             - Effect: Allow
               Action:
                 - s3:GetObject
-                - s3:PutObject
+                - s3:DeleteObject
+                - s3:ListBucket
               Resource:
+                - !GetAtt S3Shots.Arn
+                - !Sub ${S3Shots.Arn}/*
+                - !GetAtt S3Images.Arn
+                - !Sub ${S3Images.Arn}/*
+                - !GetAtt S3Transcripts.Arn
+                - !Sub ${S3Transcripts.Arn}/*
+                - !GetAtt S3Videos.Arn
                 - !Sub ${S3Videos.Arn}/*
             - Effect: Allow
               Action:
-                - dynamodb:Query
-                - dynamodb:Update*
-                - dynamodb:Put*
-                - dynamodb:Scan
-              Resource:
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
+                - rekognition:DeleteFaces
+              Resource: "*"
             - Effect: Allow
               Action:
-                - iam:GetRole
-                - iam:PassRole
-              Resource: !GetAtt SnsRekognitionRole.Arn
-            - Effect: Allow
-              Action:
-                - kms:Encrypt
                 - kms:Decrypt
-                - kms:ReEncrypt*
+                - kms:Encrypt
                 - kms:GenerateDataKey*
-                - kms:DescribeKey
-              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
+              Resource: !GetAtt VssKmsKey.Arn
+      Events:
+        HttpApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiVss
+            Path: /admin/jobs/{jobId}
+            Method: DELETE
 
-  RekognitionShotDetectionLogGroup:
+  AdminDeleteJobLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${RekognitionShotDetection}
+      LogGroupName: !Sub /aws/lambda/${AdminDeleteJob}
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
-  RekognizeOtherFigures:
+  AdminLabelFace:
     Type: AWS::Serverless::Function
     Metadata:
       cfn_nag:
@@ -1036,46 +1565,36 @@ Resources:
           - id: W89
             reason: VPC not required
     Properties:
-      CodeUri: functions/rekognize_other_figures
-      EphemeralStorage:
-        Size: 10240
+      CodeUri: functions/admin_label_face
       Environment:
         Variables:
-          bucket_videos: !Ref S3Videos
-          bucket_shots: !Ref S3Shots
-          bucket_images: !Ref S3Images
-          bedrock_model: !Ref BedrockLlmSonnet37
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+          region: !Ref AWS::Region
       Policies:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
               Action:
-                - s3:GetObject
-                - s3:PutObject
-              Resource:
-                - !Sub arn:aws:s3:::${S3Videos}/*
-                - !Sub arn:aws:s3:::${S3Shots}/*
-                - !Sub arn:aws:s3:::${S3Images}/*
-            - Effect: Allow
-              Action:
-                - bedrock:InvokeModel*
-              Resource:
-                - !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
-                - !Sub arn:${AWS::Partition}:bedrock:*:${AWS::AccountId}:inference-profile/*
-            - Effect: Allow
-              Action:
-                - iam:GetRole
-                - iam:PassRole
-              Resource: !GetAtt SnsRekognitionRole.Arn
+                - neptune-graph:ReadDataViaQuery
+                - neptune-graph:WriteDataViaQuery
+                - neptune-graph:DeleteDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+      Events:
+        HttpApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiVss
+            Path: /admin/faces/{faceId}/label
+            Method: PUT
 
-  RekognizeOtherFiguresLogGroup:
+  AdminLabelFaceLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${RekognizeOtherFigures}
+      LogGroupName: !Sub /aws/lambda/${AdminLabelFace}
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
-  StepFunction:
+  AdminDeleteFace:
     Type: AWS::Serverless::Function
     Metadata:
       cfn_nag:
@@ -1083,104 +1602,81 @@ Resources:
           - id: W89
             reason: VPC not required
     Properties:
-      CodeUri: functions/stepfunction
+      CodeUri: functions/admin_delete_face
       Environment:
         Variables:
-          StepFunction: !Ref StateMachine
+          neptune_graph_id: !GetAtt NeptuneGraph.GraphId
+          region: !Ref AWS::Region
+          face_collection_id: !Ref FaceCollectionId
+      Policies:
+        - Version: 2012-10-17
+          Statement:
+            - Effect: Allow
+              Action:
+                - neptune-graph:ReadDataViaQuery
+                - neptune-graph:WriteDataViaQuery
+                - neptune-graph:DeleteDataViaQuery
+              Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+            - Effect: Allow
+              Action:
+                - rekognition:DeleteFaces
+              Resource: "*"
+      Events:
+        HttpApiEvent:
+          Type: HttpApi
+          Properties:
+            ApiId: !Ref ApiVss
+            Path: /admin/faces/{faceId}
+            Method: DELETE
+
+  AdminDeleteFaceLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/lambda/${AdminDeleteFace}
+      KmsKeyId: !GetAtt VssKmsKey.Arn
+      RetentionInDays: 365
+
+  CostTracker:
+    Type: AWS::Serverless::Function
+    Metadata:
+      cfn_nag:
+        rules_to_suppress:
+          - id: W89
+            reason: VPC not required
+    Properties:
+      CodeUri: functions/cost_tracker
+      Environment:
+        Variables:
           vss_dynamodb_table: !Ref DynamodbTable
-          sqs_queue_url: !GetAtt Sqs.QueueUrl
       Policies:
         - Version: 2012-10-17
           Statement:
             - Effect: Allow
               Action:
-                - states:StartExecution
-              Resource:
-                - !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*
-            - Effect: Allow
-              Action:
-                - sqs:SendMessage
-                - sqs:DeleteMessage
-                - sqs:GetQueueAttributes
-              Resource: !GetAtt Sqs.Arn
-            - Effect: Allow
-              Action:
-                - dynamodb:Query
-                - dynamodb:Update*
-                - dynamodb:Put*
-                - dynamodb:Scan
+                - dynamodb:GetItem
               Resource:
                 - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
             - Effect: Allow
               Action:
-                - kms:Encrypt
                 - kms:Decrypt
-                - kms:ReEncrypt*
-                - kms:GenerateDataKey*
                 - kms:DescribeKey
               Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
       Events:
-        SQSEvent:
-          Type: SQS
+        HttpApiEvent:
+          Type: HttpApi
           Properties:
-            Queue: !GetAtt Sqs.Arn
-            BatchSize: 1
-            Enabled: True
+            ApiId: !Ref ApiVss
+            Path: /admin/costs/{jobId}
+            Method: GET
 
-  StepFunctionLogGroup:
+  CostTrackerLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
-      LogGroupName: !Sub /aws/lambda/${StepFunction}
+      LogGroupName: !Sub /aws/lambda/${CostTracker}
       KmsKeyId: !GetAtt VssKmsKey.Arn
       RetentionInDays: 365
 
-  Transcribe:
-    Type: AWS::Serverless::Function
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: VPC not required
-    Properties:
-      CodeUri: functions/transcribe
-      Environment:
-        Variables:
-          bucket_videos: !Ref S3Videos
-          bucket_transcripts: !Ref S3Transcripts
-          vss_dynamodb_table: !Ref DynamodbTable
-      Policies:
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - s3:GetObject
-                - s3:PutObject
-              Resource: arn:aws:s3:::*/*
-            - Effect: Allow
-              Action:
-                - dynamodb:UpdateItem
-              Resource: arn:aws:dynamodb:*
-            - Effect: Allow
-              Action:
-                - transcribe:StartTranscriptionJob
-              Resource: arn:aws:transcribe:*
-            - Effect: Allow
-              Action:
-                - kms:Encrypt
-                - kms:Decrypt
-                - kms:ReEncrypt*
-                - kms:GenerateDataKey*
-                - kms:DescribeKey
-              Resource: !Sub arn:aws:kms:${AWS::Region}:${AWS::AccountId}:*
-
-  TranscribeLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub /aws/lambda/${Transcribe}
-      KmsKeyId: !GetAtt VssKmsKey.Arn
-      RetentionInDays: 365
-
+  # ==================== S3 Buckets ====================
   S3Images:
     Type: AWS::S3::Bucket
     Properties:
@@ -1366,6 +1862,7 @@ Resources:
                 aws:SecureTransport: false
             Principal: "*"
 
+  # ==================== SNS & SQS ====================
   SnsRekognition:
     Type: AWS::SNS::Topic
     Properties:
@@ -1407,6 +1904,7 @@ Resources:
       KmsMasterKeyId: !GetAtt VssKmsKey.Arn
       VisibilityTimeout: 600
 
+  # ==================== Step Functions ====================
   StateMachineLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
@@ -1419,16 +1917,19 @@ Resources:
     Properties:
       DefinitionUri: step_function.json
       DefinitionSubstitutions:
+        InitJobArn: !GetAtt InitJob.Arn
         TranscribeArn: !GetAtt Transcribe.Arn
         RekognitionShotDetectionArn: !GetAtt RekognitionShotDetection.Arn
-        GenerateShotImageArn: !GetAtt GenerateShotImage.Arn
+        IntervalSegmentationArn: !GetAtt IntervalSegmentation.Arn
+        ExtractFramesArn: !GetAtt ExtractFrames.Arn
         RekognitionCelebrityDetectionArn: !GetAtt RekognitionCelebrityDetection.Arn
-        RekognizeOtherFiguresArn: !GetAtt RekognizeOtherFigures.Arn
-        CreateShotCollectionArn: !GetAtt CreateShotCollection.Arn
+        FaceCollectionArn: !GetAtt FaceCollection.Arn
         GenerateShotDescArn: !GetAtt GenerateShotDesc.Arn
-        EmbeddingAossArn: !GetAtt EmbeddingAoss.Arn
-        CompletedJobArn: !GetAtt CompletedJob.Arn
+        IngestDataArn: !GetAtt IngestData.Arn
+        FinalizeJobArn: !GetAtt FinalizeJob.Arn
         FailedJobArn: !GetAtt FailedJob.Arn
+        ConsolidateMapResultsArn: !GetAtt ConsolidateMapResults.Arn
+        ResultWriterBucket: !Ref S3Images
       Tracing:
         Enabled: True
       Logging:
@@ -1468,6 +1969,7 @@ Resources:
               Action:
                 - s3:GetObject
                 - s3:ListBucket
+                - s3:PutObject
               Resource:
                 - !GetAtt S3Images.Arn
                 - !Sub ${S3Images.Arn}/*
@@ -1483,97 +1985,51 @@ Resources:
               Resource:
                 - !Sub arn:${AWS::Partition}:states:${AWS::Region}:${AWS::AccountId}:stateMachine:*
 
-  Search:
-    Type: AWS::Serverless::Function
-    Metadata:
-      cfn_nag:
-        rules_to_suppress:
-          - id: W89
-            reason: VPC not required
+  # ==================== Cognito ====================
+  VssCognito:
+    Type: AWS::Cognito::UserPool
     Properties:
-      CodeUri: functions/search
-      Layers:
-        - !Ref OpensearchpyLambdaPackage
-        - !Ref FfmpegLambdaPackage
-      MemorySize: 5120
-      Environment:
-        Variables:
-          region: !Ref AWS::Region
-          bucket_videos: !Ref S3Videos
-          bucket_images: !Ref S3Images
-          bucket_clip_search: !Ref S3ClipSearch
-          bedrock_model: !Ref BedrockLlmSonnet4
-          text_embedding_model: !Ref BedrockTextEmbeddingModel
-          image_embedding_model: !Ref BedrockImageEmbeddingModel
-          aoss_host: !GetAtt VssCollection.CollectionEndpoint
-          aoss_visual_index: !Ref AossVectorVisualIndex
-          aoss_audio_index: !Ref AossVectorAudioIndex
-          tmp_dir: /tmp
+      UsernameAttributes:
+        - email
+      AutoVerifiedAttributes:
+        - email
+      AdminCreateUserConfig:
+        AllowAdminCreateUserOnly: false
       Policies:
-        - Version: 2012-10-17
-          Statement:
-            - Effect: Allow
-              Action:
-                - comprehend:DetectEntities
-              Resource: "*"
-            - Effect: Allow
-              Action:
-                - s3:GetObject
-                - s3:ListBucket
-              Resource:
-                - !GetAtt S3Images.Arn
-                - !Sub ${S3Images.Arn}/*
-                - !GetAtt S3Videos.Arn
-                - !Sub ${S3Videos.Arn}/*
-                - !GetAtt S3ClipSearch.Arn
-                - !Sub ${S3ClipSearch.Arn}/*
-            - Effect: Allow
-              Action:
-                - dynamodb:Query
-                - dynamodb:Update*
-                - dynamodb:Put*
-                - dynamodb:Scan
-              Resource:
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}
-                - !Sub arn:aws:dynamodb:${AWS::Region}:${AWS::AccountId}:table/${DynamodbTable}/*
-            - Effect: Allow
-              Action:
-                - bedrock:InvokeModel*
-              Resource: !Sub arn:${AWS::Partition}:bedrock:*::foundation-model/*
-            - Effect: Allow
-              Action:
-                - bedrock:Rerank
-              Resource: "*"
-            - Effect: Allow
-              Action:
-                - aoss:APIAccessAll
-                - aoss:Create*
-                - aoss:Update*
-                - aoss:Get*
-                - aoss:List*
-              Resource: !Sub arn:${AWS::Partition}:aoss:${AWS::Region}:${AWS::AccountId}:collection/*
+        PasswordPolicy:
+          MinimumLength: 8
+          RequireLowercase: True
+          RequireUppercase: True
+          RequireNumbers: True
+          RequireSymbols: True
+          TemporaryPasswordValidityDays: 1
 
-      Events:
-        HttpApiEventGet:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref ApiVss
-            Path: /search
-            Method: GET
-        HttpApiEventPost:
-          Type: HttpApi
-          Properties:
-            ApiId: !Ref ApiVss
-            Path: /search
-            Method: POST
-
-  SearchLogGroup:
-    Type: AWS::Logs::LogGroup
+  VssCognitoUserPoolClient:
+    Type: AWS::Cognito::UserPoolClient
     Properties:
-      LogGroupName: !Sub /aws/lambda/${Search}
-      KmsKeyId: !GetAtt VssKmsKey.Arn
-      RetentionInDays: 365
+      UserPoolId: !Ref VssCognito
 
+  VssCognitoUserPoolDomain:
+    Type: AWS::Cognito::UserPoolDomain
+    Properties:
+      UserPoolId: !Ref VssCognito
+      Domain: !Sub vss-${AWS::AccountId}
+
+  VssCognitoAdminGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: admin
+      UserPoolId: !Ref VssCognito
+      Description: Administrators with full access to indexing and search
+
+  VssCognitoSearchGroup:
+    Type: AWS::Cognito::UserPoolGroup
+    Properties:
+      GroupName: search
+      UserPoolId: !Ref VssCognito
+      Description: Users with search-only access
+
+  # ==================== CloudFront ====================
   S3StaticWeb:
     Type: AWS::S3::Bucket
     Metadata:
@@ -1704,6 +2160,13 @@ Resources:
           MinTTL: 0
           DefaultTTL: 3600
           MaxTTL: 86400
+        CustomErrorResponses:
+          - ErrorCode: 403
+            ResponseCode: 200
+            ResponsePagePath: /index.html
+          - ErrorCode: 404
+            ResponseCode: 200
+            ResponsePagePath: /index.html
         Restrictions:
           GeoRestriction:
             RestrictionType: none
@@ -1714,33 +2177,6 @@ Resources:
           Bucket: !Sub "${S3Logging}.s3.amazonaws.com"
           IncludeCookies: false
           Prefix: "cloudfront-logs/"
-
-  VssCognito:
-    Type: AWS::Cognito::UserPool
-    Properties:
-      UsernameAttributes:
-        - email
-      AutoVerifiedAttributes:
-        - email
-      Policies:
-        PasswordPolicy:
-          MinimumLength: 8
-          RequireLowercase: True
-          RequireUppercase: True
-          RequireNumbers: True
-          RequireSymbols: True
-          TemporaryPasswordValidityDays: 1
-
-  VssCognitoUserPoolClient:
-    Type: AWS::Cognito::UserPoolClient
-    Properties:
-      UserPoolId: !Ref VssCognito
-
-  VssCognitoUserPoolDomain:
-    Type: AWS::Cognito::UserPoolDomain
-    Properties:
-      UserPoolId: !Ref VssCognito
-      Domain: !Sub vss-${AWS::AccountId}
 
 Outputs:
   Region:
@@ -1760,3 +2196,12 @@ Outputs:
 
   WebUrl:
     Value: !GetAtt VssS3Distribution.DomainName
+
+  CloudFrontDistributionId:
+    Value: !Ref VssS3Distribution
+
+  NeptuneGraphId:
+    Value: !GetAtt NeptuneGraph.GraphId
+
+  NeptuneGraphEndpoint:
+    Value: !GetAtt NeptuneGraph.Endpoint

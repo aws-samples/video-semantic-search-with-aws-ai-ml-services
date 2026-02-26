@@ -1,15 +1,20 @@
 import json
 import logging
-import re
-import boto3
-from botocore.exceptions import ClientError
 import os
-import datetime
-import time
-import uuid
-import random
+from decimal import Decimal
+
+import boto3
 
 dynamodb_client = boto3.resource("dynamodb")
+
+
+class DecimalEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, Decimal):
+            if obj % 1 == 0:
+                return int(obj)
+            return float(obj)
+        return super().default(obj)
 
 
 def lambda_handler(event, context):
@@ -21,4 +26,4 @@ def lambda_handler(event, context):
         response = table.scan(ExclusiveStartKey=response["LastEvaluatedKey"])
         items.extend(response["Items"])
 
-    return {"statusCode": 200, "body": json.dumps(items)}
+    return {"statusCode": 200, "body": json.dumps(items, cls=DecimalEncoder)}

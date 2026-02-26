@@ -1,15 +1,13 @@
-import React, { useRef, useState } from "react";
+// Copyright Amazon.com, Inc. or its affiliates. All Rights Reserved.
+// SPDX-License-Identifier: MIT-0
+import React from "react";
 import Navigation from "./components/navigation";
-import Breadcrumbs from "./components/breadcrumbs";
 import HelpPanel from "@cloudscape-design/components/help-panel";
-import { Amplify } from "aws-amplify";
-import { AmplifyUser, AuthEventData } from "@aws-amplify/ui";
-import { Authenticator } from "@aws-amplify/ui-react";
-import "@aws-amplify/ui-react/styles.css";
+import { Amplify, Auth } from "aws-amplify";
+import { useAuthenticator } from "@aws-amplify/ui-react";
 import "./styles.css";
 import { AppLayout, TopNavigation } from "@cloudscape-design/components";
-import { Outlet, useLocation } from "react-router-dom";
-import Home from "./pages/home";
+import { Outlet, useNavigate } from "react-router-dom";
 
 import {
   AWS_API_URL,
@@ -37,25 +35,56 @@ Amplify.configure({
   aws_user_pools_web_client_id: AWS_USER_POOL_WEB_CLIENT_ID,
 });
 
-const breadcrumbPages: { [key: string]: string } = {
-  "/": "Home",
-};
+const App = () => {
+  const navigate = useNavigate();
+  const { signOut, user } = useAuthenticator((context) => [context.user]);
 
-const App = ({
-  signOut,
-  user,
-}: {
-  signOut: ((data?: AuthEventData | undefined) => void) | undefined;
-  user: AmplifyUser | undefined;
-}) => {
-  const pagePath: string = useLocation()["pathname"];
+  const [groups, setGroups] = React.useState<string[]>([]);
 
-  const homeRef = useRef<{ triggerUploadVideo: () => void }>(null);
-  const handleTriggerUpload = () => {
-    if (homeRef.current) {
-      homeRef.current.triggerUploadVideo();
-    }
-  };
+  React.useEffect(() => {
+    const fetchGroups = async () => {
+      try {
+        const session = await Auth.currentSession();
+        const g: string[] =
+          session.getIdToken().payload["cognito:groups"] || [];
+        setGroups(g);
+      } catch {
+        setGroups([]);
+      }
+    };
+    fetchGroups();
+  }, [user]);
+
+  const isAdmin = groups.includes("admin");
+
+  const utilities: any[] = [];
+
+  if (isAdmin) {
+    utilities.push({
+      type: "button",
+      text: "Admin",
+      onClick: () => navigate("/admin"),
+    });
+  }
+
+  utilities.push({
+    type: "button",
+    text: "Search",
+    iconName: "search",
+    onClick: () => navigate("/search"),
+  });
+
+  utilities.push({
+    type: "menu-dropdown",
+    description: user?.attributes?.email,
+    iconName: "user-profile",
+    onItemClick: ({ detail }: { detail: { id: string } }) => {
+      if (detail.id === "signout" && signOut) {
+        signOut();
+      }
+    },
+    items: [{ id: "signout", text: "Sign out" }],
+  });
 
   return (
     <>
@@ -70,30 +99,17 @@ const App = ({
             overflowMenuTriggerText: "More",
             overflowMenuTitleText: "All",
           }}
-          utilities={[
-            {
-              type: "button",
-              text: "Upload Video",
-              iconName: "upload",
-              onClick: handleTriggerUpload,
-            },
-            {
-              type: "menu-dropdown",
-              description: user?.attributes?.email,
-              iconName: "user-profile",
-              onItemClick: signOut,
-              items: [{ id: "signout", text: "Sign out" }],
-            },
-          ]}
+          utilities={utilities}
         />
       </div>
       <AppLayout
-        contentType="form"
+        contentType="default"
+        maxContentWidth={Number.MAX_VALUE}
         navigationHide={true}
         navigation={<Navigation />}
         tools={<HelpPanel header={<h2>Help panel</h2>} />}
         stickyNotifications={true}
-        content={<Home ref={homeRef} />}
+        content={<Outlet />}
         headerSelector="#top-nav"
         toolsHide={true}
         ariaLabels={{
@@ -110,12 +126,4 @@ const App = ({
   );
 };
 
-const UnauthenticatedApp = () => {
-  return (
-    <Authenticator loginMechanisms={["username"]}>
-      {({ signOut, user }) => <App signOut={signOut} user={user} />}
-    </Authenticator>
-  );
-};
-
-export default UnauthenticatedApp;
+export default App;

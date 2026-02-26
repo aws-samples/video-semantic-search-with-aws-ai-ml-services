@@ -1,14 +1,56 @@
 {
-  "Comment": "A description of my state machine",
-  "StartAt": "Parallel",
+  "Comment": "Video Semantic Search v2 - Configurable pipeline with Neptune, OpenSearch, and modular segmentation/detection",
+  "StartAt": "Init Job",
   "States": {
-    "Parallel": {
+    "Init Job": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${InitJobArn}",
+        "Payload.$": "$"
+      },
+      "OutputPath": "$.Payload",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Parallel - Transcribe and Segmentation",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Notify Failed Task",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+
+    "Parallel - Transcribe and Segmentation": {
       "Type": "Parallel",
-      "Next": "Video Shots",
+      "Next": "Restructure Parallel Output",
       "Branches": [
         {
-          "StartAt": "Start Transcribe Task And Wait Callback",
+          "StartAt": "Check Transcription Enabled",
           "States": {
+            "Check Transcription Enabled": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.config.transcription",
+                  "BooleanEquals": true,
+                  "Next": "Start Transcribe Task And Wait Callback"
+                }
+              ],
+              "Default": "Skip Transcription"
+            },
             "Start Transcribe Task And Wait Callback": {
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
@@ -32,15 +74,37 @@
                   "BackoffRate": 2
                 }
               ],
-              "End": true,
               "TimeoutSeconds": 600,
-              "ResultPath": "$.TranscribeParams"
+              "ResultPath": "$.TranscribeParams",
+              "End": true
+            },
+            "Skip Transcription": {
+              "Type": "Pass",
+              "Result": {},
+              "ResultPath": "$.TranscribeParams",
+              "End": true
             }
           }
         },
         {
-          "StartAt": "Start Rekognition Shot Detection Task And Wait Callback",
+          "StartAt": "Check Segmentation Mode",
           "States": {
+            "Check Segmentation Mode": {
+              "Type": "Choice",
+              "Choices": [
+                {
+                  "Variable": "$.config.segmentationMode",
+                  "StringEquals": "shot",
+                  "Next": "Start Rekognition Shot Detection Task And Wait Callback"
+                },
+                {
+                  "Variable": "$.config.segmentationMode",
+                  "StringEquals": "interval",
+                  "Next": "Interval Segmentation"
+                }
+              ],
+              "Default": "Start Rekognition Shot Detection Task And Wait Callback"
+            },
             "Start Rekognition Shot Detection Task And Wait Callback": {
               "Type": "Task",
               "Resource": "arn:aws:states:::lambda:invoke.waitForTaskToken",
@@ -64,8 +128,37 @@
                   "BackoffRate": 2
                 }
               ],
-              "ResultPath": "$.RekognitionShotDetectionParams",
               "TimeoutSeconds": 3600,
+              "ResultSelector": {
+                "segments.$": "$.Shots"
+              },
+              "ResultPath": "$.SegmentationResult",
+              "End": true
+            },
+            "Interval Segmentation": {
+              "Type": "Task",
+              "Resource": "arn:aws:states:::lambda:invoke",
+              "Parameters": {
+                "FunctionName": "${IntervalSegmentationArn}",
+                "Payload.$": "$"
+              },
+              "ResultSelector": {
+                "segments.$": "$.Payload.segments"
+              },
+              "ResultPath": "$.SegmentationResult",
+              "Retry": [
+                {
+                  "ErrorEquals": [
+                    "Lambda.ServiceException",
+                    "Lambda.AWSLambdaException",
+                    "Lambda.SdkClientException",
+                    "Lambda.TooManyRequestsException"
+                  ],
+                  "IntervalSeconds": 2,
+                  "MaxAttempts": 3,
+                  "BackoffRate": 2
+                }
+              ],
               "End": true
             }
           }
@@ -74,27 +167,129 @@
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Next": "Notify failed task"
+          "Next": "Notify Failed Task",
+          "ResultPath": "$.error"
         }
       ]
     },
-    "Video Shots": {
+
+    "Restructure Parallel Output": {
+      "Type": "Pass",
+      "Comment": "Combine parallel outputs: $[0] = transcribe branch, $[1] = segmentation branch. Restructure into a flat object for downstream states.",
+      "Parameters": {
+        "jobId.$": "$[1].jobId",
+        "video_name.$": "$[1].video_name",
+        "config.$": "$[1].config",
+        "TranscribeParams.$": "$[0].TranscribeParams",
+        "segments.$": "$[1].SegmentationResult.segments"
+      },
+      "Next": "Extract Frames"
+    },
+
+    "Extract Frames": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ExtractFramesArn}",
+        "Payload": {
+          "jobId.$": "$.jobId",
+          "video_name.$": "$.video_name",
+          "config.$": "$.config",
+          "segments.$": "$.segments",
+          "TranscribeParams.$": "$.TranscribeParams"
+        }
+      },
+      "OutputPath": "$.Payload",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.TaskFailed",
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Celebrity and Face Detection Map",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Notify Failed Task",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+
+    "Celebrity and Face Detection Map": {
       "Type": "Map",
       "ItemProcessor": {
         "ProcessorConfig": {
           "Mode": "DISTRIBUTED",
           "ExecutionType": "STANDARD"
         },
-        "StartAt": "Generate Shot Image",
+        "StartAt": "Check Face Processing Needed",
         "States": {
-          "Generate Shot Image": {
+          "Check Face Processing Needed": {
+            "Type": "Choice",
+            "Choices": [
+              {
+                "Or": [
+                  {
+                    "Variable": "$.config.celebrityDetection",
+                    "BooleanEquals": true
+                  },
+                  {
+                    "Variable": "$.config.faceRecognition",
+                    "BooleanEquals": true
+                  }
+                ],
+                "Next": "Face and Celebrity Detection"
+              }
+            ],
+            "Default": "Skip All Faces"
+          },
+          "Face and Celebrity Detection": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
-            "OutputPath": "$.Payload",
             "Parameters": {
-              "Payload.$": "$",
-              "FunctionName": "${GenerateShotImageArn}"
+              "FunctionName": "${RekognitionCelebrityDetectionArn}",
+              "Payload.$": "$"
             },
+            "ResultSelector": {
+              "celebrityFaces.$": "$.Payload.celebrityFaces",
+              "unrecognizedFaces.$": "$.Payload.unrecognizedFaces"
+            },
+            "ResultPath": "$.celebrityDetectionResult",
+            "Retry": [
+              {
+                "ErrorEquals": [
+                  "Lambda.ServiceException",
+                  "Lambda.AWSLambdaException",
+                  "Lambda.SdkClientException",
+                  "Lambda.TooManyRequestsException"
+                ],
+                "IntervalSeconds": 1,
+                "MaxAttempts": 3,
+                "BackoffRate": 2
+              }
+            ],
+            "Next": "Face Collection"
+          },
+          "Face Collection": {
+            "Type": "Task",
+            "Resource": "arn:aws:states:::lambda:invoke",
+            "Parameters": {
+              "FunctionName": "${FaceCollectionArn}",
+              "Payload.$": "$"
+            },
+            "ResultSelector": {
+              "faces.$": "$.Payload.faces"
+            },
+            "ResultPath": "$.faceCollectionResult",
             "Retry": [
               {
                 "ErrorEquals": [
@@ -104,132 +299,127 @@
                   "Lambda.SdkClientException",
                   "Lambda.TooManyRequestsException"
                 ],
-                "IntervalSeconds": 1,
+                "IntervalSeconds": 2,
                 "MaxAttempts": 3,
                 "BackoffRate": 2
               }
             ],
-            "Next": "Parallel (1)"
+            "Next": "Prepare Detection Output"
           },
-          "Parallel (1)": {
-            "Type": "Parallel",
-            "Branches": [
-              {
-                "StartAt": "Start Rekognition Celebrity Detection",
-                "States": {
-                  "Start Rekognition Celebrity Detection": {
-                    "Type": "Task",
-                    "Resource": "arn:aws:states:::lambda:invoke",
-                    "Parameters": {
-                      "Payload.$": "$",
-                      "FunctionName": "${RekognitionCelebrityDetectionArn}"
-                    },
-                    "Retry": [
-                      {
-                        "ErrorEquals": [
-                          "Lambda.ServiceException",
-                          "Lambda.AWSLambdaException",
-                          "Lambda.SdkClientException",
-                          "Lambda.TooManyRequestsException"
-                        ],
-                        "IntervalSeconds": 1,
-                        "MaxAttempts": 3,
-                        "BackoffRate": 2
-                      }
-                    ],
-                    "End": true,
-                    "OutputPath": "$.Payload"
-                  }
-                }
-              },
-              {
-                "StartAt": "Rekognize Other Figures",
-                "States": {
-                  "Rekognize Other Figures": {
-                    "Type": "Task",
-                    "Resource": "arn:aws:states:::lambda:invoke",
-                    "Parameters": {
-                      "Payload.$": "$",
-                      "FunctionName": "${RekognizeOtherFiguresArn}"
-                    },
-                    "Retry": [
-                      {
-                        "ErrorEquals": [
-                          "States.TaskFailed",
-                          "Lambda.ServiceException",
-                          "Lambda.AWSLambdaException",
-                          "Lambda.SdkClientException",
-                          "Lambda.TooManyRequestsException"
-                        ],
-                        "IntervalSeconds": 60,
-                        "MaxAttempts": 20,
-                        "BackoffRate": 1
-                      }
-                    ],
-                    "OutputPath": "$.Payload",
-                    "End": true
-                  }
-                }
-              }
-            ],
-            "Next": "Create Shot Image Collection"
-          },
-          "Create Shot Image Collection": {
-            "Type": "Task",
-            "Resource": "arn:aws:states:::lambda:invoke",
-            "OutputPath": "$.Payload",
-            "Parameters": {
-              "Payload.$": "$",
-              "FunctionName": "${CreateShotCollectionArn}"
+          "Skip All Faces": {
+            "Type": "Pass",
+            "Result": {
+              "faces": []
             },
-            "Retry": [
-              {
-                "ErrorEquals": [
-                  "Lambda.ServiceException",
-                  "Lambda.AWSLambdaException",
-                  "Lambda.SdkClientException",
-                  "Lambda.TooManyRequestsException"
-                ],
-                "IntervalSeconds": 1,
-                "MaxAttempts": 3,
-                "BackoffRate": 2
-              }
-            ],
+            "ResultPath": "$.faceCollectionResult",
+            "Next": "Prepare Detection Output"
+          },
+          "Prepare Detection Output": {
+            "Type": "Pass",
+            "Parameters": {
+              "jobId.$": "$.jobId",
+              "video_name.$": "$.video_name",
+              "shot_id.$": "$.shot_id",
+              "shot_startTime.$": "$.shot_startTime",
+              "shot_endTime.$": "$.shot_endTime",
+              "frames.$": "$.frames",
+              "composite_key.$": "$.composite_key",
+              "clip_key.$": "$.clip_key",
+              "faceCollectionResult.$": "$.faceCollectionResult"
+            },
             "End": true
           }
         }
       },
+      "ItemsPath": "$.segments",
+      "ItemSelector": {
+        "jobId.$": "$$.Map.Item.Value.jobId",
+        "video_name.$": "$$.Map.Item.Value.video_name",
+        "shot_id.$": "$$.Map.Item.Value.shot_id",
+        "shot_startTime.$": "$$.Map.Item.Value.shot_startTime",
+        "shot_endTime.$": "$$.Map.Item.Value.shot_endTime",
+        "frames.$": "$$.Map.Item.Value.frames",
+        "composite_key.$": "$$.Map.Item.Value.composite_key",
+        "clip_key.$": "$$.Map.Item.Value.clip_key",
+        "config.$": "$.config",
+        "TranscribeParams.$": "$.TranscribeParams",
+        "segmentIndex.$": "$$.Map.Item.Index"
+      },
       "MaxConcurrency": 10,
-      "Label": "VideoShots",
-      "Next": "Video Shot (2)",
+      "Label": "CelebrityFaceDetection",
+      "ToleratedFailurePercentage": 2,
+      "ResultWriter": {
+        "Resource": "arn:aws:states:::s3:putObject",
+        "Parameters": {
+          "Bucket": "${ResultWriterBucket}",
+          "Prefix": "sfn-results/detection"
+        }
+      },
+      "ResultPath": "$.detectionResults",
+      "Next": "Consolidate Detection Results",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Next": "Notify failed task",
-          "ResultPath": null
+          "Next": "Notify Failed Task",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+
+    "Consolidate Detection Results": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ConsolidateMapResultsArn}",
+        "Payload": {
+          "resultWriterDetails.$": "$.detectionResults.ResultWriterDetails"
+        }
+      },
+      "ResultSelector": {
+        "consolidatedBucket.$": "$.Payload.consolidatedBucket",
+        "consolidatedKey.$": "$.Payload.consolidatedKey"
+      },
+      "ResultPath": "$.consolidatedDetection",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
         }
       ],
-      "ItemsPath": "$[1].RekognitionShotDetectionParams.Shots",
-      "ToleratedFailurePercentage": 2,
-      "ResultPath": "$"
+      "Next": "Description Generation Map",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Notify Failed Task",
+          "ResultPath": "$.error"
+        }
+      ]
     },
-    "Video Shot (2)": {
+
+    "Description Generation Map": {
       "Type": "Map",
       "ItemProcessor": {
         "ProcessorConfig": {
           "Mode": "DISTRIBUTED",
           "ExecutionType": "STANDARD"
         },
-        "StartAt": "Inference Shot Description",
+        "StartAt": "Generate Shot Description",
         "States": {
-          "Inference Shot Description": {
+          "Generate Shot Description": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
-            "OutputPath": "$.Payload",
             "Parameters": {
-              "Payload.$": "$",
-              "FunctionName": "${GenerateShotDescArn}"
+              "FunctionName": "${GenerateShotDescArn}",
+              "Payload.$": "$"
             },
+            "OutputPath": "$.Payload",
             "Retry": [
               {
                 "ErrorEquals": [
@@ -244,16 +434,106 @@
                 "BackoffRate": 1
               }
             ],
-            "Next": "Start Embedding and Ingestion to OpenSearch Task"
-          },
-          "Start Embedding and Ingestion to OpenSearch Task": {
+            "End": true
+          }
+        }
+      },
+      "ItemReader": {
+        "Resource": "arn:aws:states:::s3:getObject",
+        "ReaderConfig": {
+          "InputType": "JSON"
+        },
+        "Parameters": {
+          "Bucket.$": "$.consolidatedDetection.consolidatedBucket",
+          "Key.$": "$.consolidatedDetection.consolidatedKey"
+        }
+      },
+      "ItemSelector": {
+        "jobId.$": "$$.Map.Item.Value.jobId",
+        "video_name.$": "$$.Map.Item.Value.video_name",
+        "shot_id.$": "$$.Map.Item.Value.shot_id",
+        "shot_startTime.$": "$$.Map.Item.Value.shot_startTime",
+        "shot_endTime.$": "$$.Map.Item.Value.shot_endTime",
+        "frames.$": "$$.Map.Item.Value.frames",
+        "composite_key.$": "$$.Map.Item.Value.composite_key",
+        "clip_key.$": "$$.Map.Item.Value.clip_key",
+        "faces.$": "$$.Map.Item.Value.faceCollectionResult.faces"
+      },
+      "MaxConcurrency": 10,
+      "Label": "DescriptionGeneration",
+      "ToleratedFailurePercentage": 2,
+      "ResultWriter": {
+        "Resource": "arn:aws:states:::s3:putObject",
+        "Parameters": {
+          "Bucket": "${ResultWriterBucket}",
+          "Prefix": "sfn-results/description"
+        }
+      },
+      "ResultPath": "$.descriptionResults",
+      "Next": "Consolidate Description Results",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Notify Failed Task",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+
+    "Consolidate Description Results": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Parameters": {
+        "FunctionName": "${ConsolidateMapResultsArn}",
+        "Payload": {
+          "resultWriterDetails.$": "$.descriptionResults.ResultWriterDetails"
+        }
+      },
+      "ResultSelector": {
+        "consolidatedBucket.$": "$.Payload.consolidatedBucket",
+        "consolidatedKey.$": "$.Payload.consolidatedKey"
+      },
+      "ResultPath": "$.consolidatedDescription",
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "Lambda.TooManyRequestsException"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2
+        }
+      ],
+      "Next": "Ingestion Map",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Notify Failed Task",
+          "ResultPath": "$.error"
+        }
+      ]
+    },
+
+    "Ingestion Map": {
+      "Type": "Map",
+      "ItemProcessor": {
+        "ProcessorConfig": {
+          "Mode": "DISTRIBUTED",
+          "ExecutionType": "STANDARD"
+        },
+        "StartAt": "Ingest Data",
+        "States": {
+          "Ingest Data": {
             "Type": "Task",
             "Resource": "arn:aws:states:::lambda:invoke",
-            "OutputPath": "$.Payload",
             "Parameters": {
-              "Payload.$": "$",
-              "FunctionName": "${EmbeddingAossArn}"
+              "FunctionName": "${IngestDataArn}",
+              "Payload.$": "$"
             },
+            "OutputPath": "$.Payload",
             "Retry": [
               {
                 "ErrorEquals": [
@@ -265,35 +545,65 @@
                 ],
                 "IntervalSeconds": 10,
                 "MaxAttempts": 3,
-                "BackoffRate": 1
+                "BackoffRate": 2
               }
             ],
             "End": true
           }
         }
       },
-      "Next": "Notify completed job",
-      "Label": "VideoShot2",
+      "ItemReader": {
+        "Resource": "arn:aws:states:::s3:getObject",
+        "ReaderConfig": {
+          "InputType": "JSON"
+        },
+        "Parameters": {
+          "Bucket.$": "$.consolidatedDescription.consolidatedBucket",
+          "Key.$": "$.consolidatedDescription.consolidatedKey"
+        }
+      },
+      "ItemSelector": {
+        "jobId.$": "$$.Map.Item.Value.jobId",
+        "video_name.$": "$$.Map.Item.Value.video_name",
+        "shot_id.$": "$$.Map.Item.Value.shot_id",
+        "shot_startTime.$": "$$.Map.Item.Value.shot_startTime",
+        "shot_endTime.$": "$$.Map.Item.Value.shot_endTime",
+        "frames.$": "$$.Map.Item.Value.frames",
+        "composite_key.$": "$$.Map.Item.Value.composite_key",
+        "clip_key.$": "$$.Map.Item.Value.clip_key",
+        "faces.$": "$$.Map.Item.Value.faces",
+        "shot_description.$": "$$.Map.Item.Value.shot_description",
+        "shot_transcript.$": "$$.Map.Item.Value.shot_transcript"
+      },
       "MaxConcurrency": 10,
-      "ItemsPath": "$",
+      "Label": "Ingestion",
       "ToleratedFailurePercentage": 2,
-      "ResultPath": null,
+      "ResultWriter": {
+        "Resource": "arn:aws:states:::s3:putObject",
+        "Parameters": {
+          "Bucket": "${ResultWriterBucket}",
+          "Prefix": "sfn-results/ingestion"
+        }
+      },
+      "ResultPath": "$.ingestionResults",
+      "Next": "Finalize Job",
       "Catch": [
         {
           "ErrorEquals": ["States.ALL"],
-          "Next": "Notify failed task",
-          "ResultPath": null
+          "Next": "Notify Failed Task",
+          "ResultPath": "$.error"
         }
       ]
     },
-    "Notify completed job": {
+
+    "Finalize Job": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
-      "OutputPath": "$.Payload",
       "Parameters": {
-        "Payload.$": "$",
-        "FunctionName": "${CompletedJobArn}"
+        "FunctionName": "${FinalizeJobArn}",
+        "Payload.$": "$"
       },
+      "OutputPath": "$.Payload",
       "Retry": [
         {
           "ErrorEquals": [
@@ -307,9 +617,17 @@
           "BackoffRate": 2
         }
       ],
-      "Next": "Success"
+      "Next": "Success",
+      "Catch": [
+        {
+          "ErrorEquals": ["States.ALL"],
+          "Next": "Notify Failed Task",
+          "ResultPath": "$.error"
+        }
+      ]
     },
-    "Notify failed task": {
+
+    "Notify Failed Task": {
       "Type": "Task",
       "Resource": "arn:aws:states:::lambda:invoke",
       "OutputPath": "$.Payload",
@@ -332,9 +650,11 @@
       ],
       "Next": "Fail"
     },
+
     "Fail": {
       "Type": "Fail"
     },
+
     "Success": {
       "Type": "Succeed"
     }

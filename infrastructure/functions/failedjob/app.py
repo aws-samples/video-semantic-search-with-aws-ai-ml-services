@@ -1,48 +1,54 @@
 import json
 import logging
-import re
 import boto3
-from botocore.exceptions import ClientError
 import os
 import datetime
-from opensearchpy import OpenSearch, RequestsHttpConnection, AWSV4SignerAuth
+
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+
+neptune_client = boto3.client("neptune-graph")
 
 
 def lambda_handler(event, context):
     dynamodb_table = os.environ["vss_dynamodb_table"]
-    jobId = event[0]["jobId"]
+    # Handle both array and dict input from Step Functions error handling
+    if isinstance(event, list) and len(event) > 0:
+        jobId = event[0].get("jobId", "unknown")
+    elif isinstance(event, dict):
+        jobId = event.get("jobId", event.get("Cause", "unknown"))
+    else:
+        jobId = "unknown"
+
     status = "Failed"
     endTime = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     updatejobStatus(dynamodb_table, jobId, status, endTime)
-    delete_shot_collection(os.environ["aoss_host"], os.environ["region"], jobId)
+
+    # Update Neptune Video node status
+    try:
+        graph_id = os.environ.get("neptune_graph_id")
+        if graph_id and jobId != "unknown":
+            neptune_client.execute_query(
+                graphIdentifier=graph_id,
+                queryString="MATCH (v:Video {jobId: $jobId}) SET v.status = 'Failed'",
+                parameters={"jobId": jobId},
+                language="OPEN_CYPHER",
+            )
+    except Exception as e:
+        logger.error(f"Failed to update Neptune: {e}")
+
     return {"statusCode": 200}
 
 
 def updatejobStatus(dynamodb_table, jobId, status, endTime):
     dynamodb = boto3.resource("dynamodb")
     table = dynamodb.Table(dynamodb_table)
-    dynamodbResponse = table.update_item(
-        Key={"JobId": jobId},
-        UpdateExpression="SET #st = :value1, #et = :value2",
-        ExpressionAttributeValues={":value1": status, ":value2": endTime},
-        ExpressionAttributeNames={"#st": "Status", "#et": "EndTime"},
-    )
-
-
-def delete_shot_collection(host, region, index):
-    host = host.split("://")[1] if "://" in host else host
-    credentials = boto3.Session().get_credentials()
-    auth = AWSV4SignerAuth(credentials, region, "aoss")
-
-    client = OpenSearch(
-        hosts=[{"host": host, "port": 443}],
-        http_auth=auth,
-        use_ssl=True,
-        verify_certs=True,
-        connection_class=RequestsHttpConnection,
-        pool_maxsize=20,
-    )
-
-    exist = client.indices.exists(index=index)
-    if exist:
-        response = client.indices.delete(index=index)
+    try:
+        table.update_item(
+            Key={"JobId": jobId},
+            UpdateExpression="SET #st = :value1, #et = :value2",
+            ExpressionAttributeValues={":value1": status, ":value2": endTime},
+            ExpressionAttributeNames={"#st": "Status", "#et": "EndTime"},
+        )
+    except Exception as e:
+        logger.error(f"Failed to update DynamoDB: {e}")
