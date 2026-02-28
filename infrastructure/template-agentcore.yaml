@@ -1,0 +1,454 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: "AgentCore deployment - Video Search Agent for agentic RAG search"
+
+Parameters:
+  AgentName:
+    Type: String
+    Default: "VideoSearchAgent"
+    Description: "Name for the agent runtime"
+    AllowedPattern: "^[a-zA-Z][a-zA-Z0-9_]{0,47}$"
+    ConstraintDescription: "Must start with a letter, max 48 characters, alphanumeric and underscores only"
+
+  S3BucketName:
+    Type: String
+    Description: "S3 Bucket Name for the Agent Code Zip"
+
+  ImageTag:
+    Type: String
+    Default: "latest"
+    Description: "Tag for the Docker image"
+
+  NetworkMode:
+    Type: String
+    Default: "PUBLIC"
+    Description: "Network mode for AgentCore resources"
+    AllowedValues:
+      - PUBLIC
+      - PRIVATE
+
+  ECRRepositoryName:
+    Type: String
+    Default: "video-search-agent"
+    Description: "Name of the ECR repository"
+
+  # Agent runtime configuration (from main stack outputs)
+  AossHost:
+    Type: String
+    Description: "OpenSearch Serverless collection endpoint"
+
+  AossVisualIndex:
+    Type: String
+    Default: "vss-visual-index"
+    Description: "Visual index name"
+
+  AossAudioIndex:
+    Type: String
+    Default: "vss-audio-index"
+    Description: "Audio/transcript index name"
+
+  EmbeddingModel:
+    Type: String
+    Description: "Bedrock embedding model ID (from main stack)"
+
+  BedrockLlmModel:
+    Type: String
+    Description: "Bedrock LLM model ID for agent reasoning (from main stack)"
+
+  NeptuneGraphId:
+    Type: String
+    Description: "Neptune Analytics graph identifier"
+
+  BuildTrigger:
+    Type: String
+    Default: "1"
+    Description: "Change this value to force a new Docker image build"
+
+Resources:
+  # ==================== ECR Repository ====================
+  ECRRepository:
+    Type: AWS::ECR::Repository
+    DeletionPolicy: Delete
+    UpdateReplacePolicy: Delete
+    Properties:
+      RepositoryName: !Sub "${AWS::StackName}-${ECRRepositoryName}"
+      ImageTagMutability: MUTABLE
+      EmptyOnDelete: true
+      ImageScanningConfiguration:
+        ScanOnPush: true
+      RepositoryPolicyText:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AllowPullFromAccount
+            Effect: Allow
+            Principal:
+              AWS: !Sub "arn:aws:iam::${AWS::AccountId}:root"
+            Action:
+              - ecr:BatchGetImage
+              - ecr:GetDownloadUrlForLayer
+
+  # ==================== Agent Execution Role ====================
+  AgentExecutionRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AssumeRolePolicy
+            Effect: Allow
+            Principal:
+              Service: bedrock-agentcore.amazonaws.com
+            Action: sts:AssumeRole
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn: !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:*"
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/BedrockAgentCoreFullAccess
+      Policies:
+        - PolicyName: AgentCoreExecutionPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: ECRImageAccess
+                Effect: Allow
+                Action:
+                  - ecr:BatchGetImage
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchCheckLayerAvailability
+                Resource: !GetAtt ECRRepository.Arn
+              - Sid: ECRTokenAccess
+                Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: "*"
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogStreams
+                  - logs:CreateLogGroup
+                  - logs:DescribeLogGroups
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: "*"
+              - Sid: XRayTracing
+                Effect: Allow
+                Action:
+                  - xray:PutTraceSegments
+                  - xray:PutTelemetryRecords
+                  - xray:GetSamplingRules
+                  - xray:GetSamplingTargets
+                Resource: "*"
+              - Sid: CloudWatchMetrics
+                Effect: Allow
+                Resource: "*"
+                Action: cloudwatch:PutMetricData
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: bedrock-agentcore
+              - Sid: GetAgentAccessToken
+                Effect: Allow
+                Action:
+                  - bedrock-agentcore:GetWorkloadAccessToken
+                  - bedrock-agentcore:GetWorkloadAccessTokenForJWT
+                  - bedrock-agentcore:GetWorkloadAccessTokenForUserId
+                Resource:
+                  - !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default"
+                  - !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:workload-identity-directory/default/workload-identity/*"
+              - Sid: BedrockModelInvocation
+                Effect: Allow
+                Action:
+                  - bedrock:InvokeModel
+                  - bedrock:InvokeModelWithResponseStream
+                Resource: "*"
+              - Sid: OpenSearchServerlessAccess
+                Effect: Allow
+                Action:
+                  - aoss:APIAccessAll
+                Resource: "*"
+              - Sid: NeptuneGraphAccess
+                Effect: Allow
+                Action:
+                  - neptune-graph:ReadDataViaQuery
+                Resource: !Sub "arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraphId}"
+
+  # ==================== AOSS Data Access Policy ====================
+  AgentDataAccessPolicy:
+    Type: AWS::OpenSearchServerless::AccessPolicy
+    Properties:
+      Name: !Sub "agent-policy-${AWS::AccountId}"
+      Description: "Allow AgentCore execution role to access OpenSearch Serverless"
+      Type: data
+      Policy: !Sub |
+        [
+          {
+            "Rules": [
+              {
+                "ResourceType": "index",
+                "Resource": [
+                  "index/vss-collection-${AWS::AccountId}/*"
+                ],
+                "Permission": [
+                  "aoss:ReadDocument",
+                  "aoss:DescribeIndex"
+                ]
+              },
+              {
+                "ResourceType": "collection",
+                "Resource": [
+                  "collection/vss-collection-${AWS::AccountId}"
+                ],
+                "Permission": [
+                  "aoss:DescribeCollectionItems"
+                ]
+              }
+            ],
+            "Principal": [
+              "${AgentExecutionRole.Arn}"
+            ]
+          }
+        ]
+
+  # ==================== CodeBuild ====================
+  CodeBuildRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: codebuild.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: CodeBuildPolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CloudWatchLogs
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub "arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/codebuild/*"
+              - Sid: ECRAccess
+                Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                  - ecr:GetAuthorizationToken
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
+                Resource:
+                  - !GetAtt ECRRepository.Arn
+                  - "*"
+              - Sid: S3Access
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::${S3BucketName}"
+                  - !Sub "arn:aws:s3:::${S3BucketName}/*"
+
+  AgentImageBuildProject:
+    Type: AWS::CodeBuild::Project
+    Properties:
+      Name: !Sub "${AWS::StackName}-agent-build"
+      Description: !Sub "Build video search agent Docker image for ${AWS::StackName}"
+      ServiceRole: !GetAtt CodeBuildRole.Arn
+      Artifacts:
+        Type: NO_ARTIFACTS
+      Environment:
+        Type: ARM_CONTAINER
+        ComputeType: BUILD_GENERAL1_LARGE
+        Image: aws/codebuild/amazonlinux2-aarch64-standard:3.0
+        PrivilegedMode: true
+        EnvironmentVariables:
+          - Name: AWS_DEFAULT_REGION
+            Value: !Ref AWS::Region
+          - Name: AWS_ACCOUNT_ID
+            Value: !Ref AWS::AccountId
+          - Name: IMAGE_REPO_NAME
+            Value: !Ref ECRRepository
+          - Name: IMAGE_TAG
+            Value: !Ref ImageTag
+      Source:
+        Type: S3
+        Location: !Sub "${S3BucketName}/agents.zip"
+        BuildSpec: |
+          version: 0.2
+          phases:
+            pre_build:
+              commands:
+                - echo Logging in to Amazon ECR...
+                - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+            build:
+              commands:
+                - echo Build started on `date`
+                - echo Building the Docker image for video search agent ARM64...
+                - docker build -t $IMAGE_REPO_NAME:$IMAGE_TAG .
+                - docker tag $IMAGE_REPO_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
+            post_build:
+              commands:
+                - echo Build completed on `date`
+                - echo Pushing the Docker image...
+                - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$IMAGE_REPO_NAME:$IMAGE_TAG
+                - echo Docker image pushed successfully
+
+  # ==================== Custom Resource: Trigger Build ====================
+  CustomResourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: lambda.amazonaws.com
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: CustomResourcePolicy
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CodeBuildAccess
+                Effect: Allow
+                Action:
+                  - codebuild:StartBuild
+                  - codebuild:BatchGetBuilds
+                  - codebuild:BatchGetProjects
+                Resource: !GetAtt AgentImageBuildProject.Arn
+
+  CodeBuildTriggerFunction:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: !Sub "${AWS::StackName}-codebuild-trigger"
+      Description: "Triggers CodeBuild projects as CloudFormation custom resource"
+      Handler: index.handler
+      Role: !GetAtt CustomResourceRole.Arn
+      Runtime: python3.12
+      Timeout: 900
+      Code:
+        ZipFile: |
+          import boto3
+          import cfnresponse
+          import json
+          import logging
+          import time
+
+          logger = logging.getLogger()
+          logger.setLevel(logging.INFO)
+
+          def handler(event, context):
+              logger.info('Received event: %s', json.dumps(event))
+              try:
+                  if event['RequestType'] == 'Delete':
+                      cfnresponse.send(event, context, cfnresponse.SUCCESS, {})
+                      return
+
+                  project_name = event['ResourceProperties']['ProjectName']
+                  codebuild = boto3.client('codebuild')
+
+                  project_info = codebuild.batch_get_projects(names=[project_name])
+                  if not project_info['projects']:
+                      raise Exception(f"CodeBuild project '{project_name}' not found")
+
+                  response = codebuild.start_build(projectName=project_name)
+                  build_id = response['build']['id']
+                  logger.info(f"Started build: {build_id}")
+
+                  max_wait_time = context.get_remaining_time_in_millis() / 1000 - 30
+                  start_time = time.time()
+
+                  while True:
+                      if time.time() - start_time > max_wait_time:
+                          cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': f'Build {build_id} timed out'})
+                          return
+
+                      build_response = codebuild.batch_get_builds(ids=[build_id])
+                      build_status = build_response['builds'][0]['buildStatus']
+
+                      if build_status == 'SUCCEEDED':
+                          cfnresponse.send(event, context, cfnresponse.SUCCESS, {'BuildId': build_id, 'Status': build_status})
+                          return
+                      elif build_status in ['FAILED', 'FAULT', 'STOPPED', 'TIMED_OUT']:
+                          cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': f'Build failed: {build_status}', 'BuildId': build_id})
+                          return
+
+                      logger.info(f"Build {build_id} status: {build_status}")
+                      time.sleep(30)
+
+              except Exception as e:
+                  logger.error('Error: %s', str(e))
+                  cfnresponse.send(event, context, cfnresponse.FAILED, {'Error': str(e)})
+
+  TriggerImageBuild:
+    Type: Custom::CodeBuildTrigger
+    DependsOn:
+      - ECRRepository
+      - AgentImageBuildProject
+      - CodeBuildTriggerFunction
+    Properties:
+      ServiceToken: !GetAtt CodeBuildTriggerFunction.Arn
+      ProjectName: !Ref AgentImageBuildProject
+      WaitForCompletion: "true"
+      BuildTrigger: !Ref BuildTrigger
+
+  # ==================== AgentCore Runtime ====================
+  AgentRuntime:
+    Type: AWS::BedrockAgentCore::Runtime
+    DependsOn:
+      - TriggerImageBuild
+    Properties:
+      AgentRuntimeName: !Sub
+        - "${StackNameUnderscore}_${AgentName}"
+        - StackNameUnderscore: !Join ["_", !Split ["-", !Ref "AWS::StackName"]]
+      AgentRuntimeArtifact:
+        ContainerConfiguration:
+          ContainerUri: !Sub "${ECRRepository.RepositoryUri}:${ImageTag}"
+      RoleArn: !GetAtt AgentExecutionRole.Arn
+      NetworkConfiguration:
+        NetworkMode: !Ref NetworkMode
+      Description: !Sub "Video search agent for ${AWS::StackName}"
+      EnvironmentVariables:
+        AWS_REGION: !Ref AWS::Region
+        AOSS_HOST: !Ref AossHost
+        AOSS_VISUAL_INDEX: !Ref AossVisualIndex
+        AOSS_AUDIO_INDEX: !Ref AossAudioIndex
+        EMBEDDING_MODEL: !Ref EmbeddingModel
+        BEDROCK_LLM_MODEL: !Ref BedrockLlmModel
+        NEPTUNE_GRAPH_ID: !Ref NeptuneGraphId
+
+Outputs:
+  AgentRuntimeId:
+    Description: "ID of the created agent runtime"
+    Value: !GetAtt AgentRuntime.AgentRuntimeId
+    Export:
+      Name: !Sub "${AWS::StackName}-AgentRuntimeId"
+
+  AgentRuntimeArn:
+    Description: "ARN of the agent runtime"
+    Value: !Sub "arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/${AgentRuntime.AgentRuntimeId}"
+
+  ECRRepositoryUri:
+    Description: "URI of the ECR repository"
+    Value: !GetAtt ECRRepository.RepositoryUri
+    Export:
+      Name: !Sub "${AWS::StackName}-ECRRepositoryUri"
+
+  AgentExecutionRoleArn:
+    Description: "ARN of the agent execution role"
+    Value: !GetAtt AgentExecutionRole.Arn
+
+  BuildTrigger:
+    Description: "Hash of the deployed agent code"
+    Value: !Ref BuildTrigger
+    Export:
+      Name: !Sub "${AWS::StackName}-AgentExecutionRoleArn"

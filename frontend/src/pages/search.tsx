@@ -10,6 +10,7 @@ import Alert from "@cloudscape-design/components/alert";
 import Tabs from "@cloudscape-design/components/tabs";
 import Button from "@cloudscape-design/components/button";
 import Spinner from "@cloudscape-design/components/spinner";
+import Toggle from "@cloudscape-design/components/toggle";
 import { useAuthenticator } from "@aws-amplify/ui-react";
 import "@aws-amplify/ui-react/styles.css";
 import axios from "axios";
@@ -54,6 +55,7 @@ const Search: React.FC = () => {
   const [hasSearched, setHasSearched] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeTabId, setActiveTabId] = useState("text");
+  const [agenticEnabled, setAgenticEnabled] = useState(true);
 
   // Shared player state
   const [selectedShotIndex, setSelectedShotIndex] = useState<number | null>(
@@ -289,10 +291,12 @@ const Search: React.FC = () => {
     setResults([]);
 
     try {
+      const strategyParam = agenticEnabled ? "&strategy=agentic" : "";
       const response = await authenticatedAxios.get(
         AWS_API_URL +
           "/search?type=text&query=" +
-          encodeURIComponent(textQuery),
+          encodeURIComponent(textQuery) +
+          strategyParam,
       );
       if (response.status === 200) {
         setResults(deduplicateResults(response.data));
@@ -304,7 +308,7 @@ const Search: React.FC = () => {
       setIsLoading(false);
       setHasSearched(true);
     }
-  }, [textQuery]);
+  }, [textQuery, agenticEnabled]);
 
   // Image search
   const handleImageSearch = useCallback(async (files: File[]) => {
@@ -432,7 +436,15 @@ const Search: React.FC = () => {
               id: "text",
               label: "Text Search",
               content: (
-                <SpaceBetween size="m">
+                <div style={{ position: "relative" }}>
+                  <div style={{ position: "absolute", top: 0, right: 0 }}>
+                    <Toggle
+                      onChange={({ detail }) => setAgenticEnabled(detail.checked)}
+                      checked={agenticEnabled}
+                    >
+                      AI Reasoning
+                    </Toggle>
+                  </div>
                   <FormField description="Enter a description of what you are looking for">
                     <div
                       style={{
@@ -464,7 +476,7 @@ const Search: React.FC = () => {
                       </Button>
                     </div>
                   </FormField>
-                </SpaceBetween>
+                </div>
               ),
             },
             {
@@ -566,6 +578,12 @@ const Search: React.FC = () => {
               pendingVideoRef.current = null;
               setIsVideoLoading(false);
               videoEl.play().catch(() => {});
+            }
+          }}
+          onPlay={() => {
+            const videoEl = videoRef.current;
+            if (videoEl && endTimeRef.current > 0 && videoEl.currentTime >= endTimeRef.current / 1000) {
+              endTimeRef.current = 0;
             }
           }}
           style={{

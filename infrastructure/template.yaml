@@ -27,9 +27,9 @@ Parameters:
     Type: String
     Description: Bedrock Rerank Model
     Default: cohere.rerank-v3-5:0
-  BedrockQueryLlm:
+  BedrockAgentLlm:
     Type: String
-    Description: Bedrock LLM for search query analysis and reranking
+    Description: Bedrock LLM for AgentCore video search agent
     Default: us.anthropic.claude-haiku-4-5-20251001-v1:0
   NeptuneGraphMemory:
     Type: Number
@@ -39,6 +39,10 @@ Parameters:
     Type: String
     Description: Rekognition Face Collection ID
     Default: vss-global-faces
+  AgentCoreRuntimeArn:
+    Type: String
+    Description: AgentCore Runtime ARN for agentic search (from template-agentcore stack output)
+    Default: ""
 
 Globals:
   Function:
@@ -1212,12 +1216,12 @@ Resources:
           bucket_clip_search: !Ref S3ClipSearch
           embedding_model: !Ref BedrockEmbeddingModel
           rerank_model: !Ref BedrockRerankModel
-          query_llm_model: !Ref BedrockQueryLlm
           aoss_host: !GetAtt VssCollection.CollectionEndpoint
           aoss_visual_index: !Ref AossVectorVisualIndex
           aoss_audio_index: !Ref AossVectorAudioIndex
           neptune_graph_id: !GetAtt NeptuneGraph.GraphId
           tmp_dir: /tmp
+          agentcore_runtime_arn: !Ref AgentCoreRuntimeArn
       Policies:
         - Version: 2012-10-17
           Statement:
@@ -1263,6 +1267,10 @@ Resources:
               Action:
                 - neptune-graph:ReadDataViaQuery
               Resource: !Sub arn:aws:neptune-graph:${AWS::Region}:${AWS::AccountId}:graph/${NeptuneGraph.GraphId}
+            - Effect: Allow
+              Action:
+                - bedrock-agentcore:InvokeAgentRuntime
+              Resource: !Sub arn:aws:bedrock-agentcore:${AWS::Region}:${AWS::AccountId}:runtime/*
 
       Events:
         HttpApiEventGet:
@@ -1677,6 +1685,15 @@ Resources:
       RetentionInDays: 365
 
   # ==================== S3 Buckets ====================
+  AgentCoreCodeBucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: True
+        BlockPublicPolicy: True
+        IgnorePublicAcls: True
+        RestrictPublicBuckets: True
+
   S3Images:
     Type: AWS::S3::Bucket
     Properties:
@@ -2205,3 +2222,15 @@ Outputs:
 
   NeptuneGraphEndpoint:
     Value: !GetAtt NeptuneGraph.Endpoint
+
+  AgentCoreCodeBucket:
+    Value: !Ref AgentCoreCodeBucket
+
+  AossHost:
+    Value: !GetAtt VssCollection.CollectionEndpoint
+
+  EmbeddingModel:
+    Value: !Ref BedrockEmbeddingModel
+
+  BedrockAgentLlm:
+    Value: !Ref BedrockAgentLlm

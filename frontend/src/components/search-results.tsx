@@ -290,7 +290,7 @@ const SearchResults: React.FC<SearchResultsProps> = ({
                         <div>
                           <Box variant="awsui-key-label">Transcript</Box>
                           <Box color="text-body-secondary">
-                            {result.shot_transcript}
+                            <span style={{ whiteSpace: "pre-line" }}>{result.shot_transcript}</span>
                           </Box>
                         </div>
                       )}
@@ -298,7 +298,7 @@ const SearchResults: React.FC<SearchResultsProps> = ({
                         <div>
                           <Box variant="awsui-key-label">Description</Box>
                           <Box color="text-body-secondary">
-                            {result.shot_description}
+                            <span style={{ whiteSpace: "pre-line" }}>{result.shot_description}</span>
                           </Box>
                         </div>
                       )}
