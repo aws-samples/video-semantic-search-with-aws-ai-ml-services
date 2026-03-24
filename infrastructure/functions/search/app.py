@@ -20,9 +20,11 @@ logger.setLevel(logging.INFO)
 # ---------------------------------------------------------------------------
 # Constants
 # ---------------------------------------------------------------------------
-MAX_OPENSEARCH_RESULTS = 100
-OPENSEARCH_RELEVANCE_THRESHOLD = 0.0  # Hybrid search handles scoring
+DEFAULT_VISUAL_RESULTS = 100
+DEFAULT_AUDIO_RESULTS = 50
+DEFAULT_IMAGE_RESULTS = 100
 MAX_RERANK_RESULTS = 100
+OPENSEARCH_RELEVANCE_THRESHOLD = 0.0
 RERANK_RELEVANCE_THRESHOLD = 0.0
 MAX_CLIPSEARCH_RELEVANCE_THRESHOLD = 0.75
 PRESIGNED_URL_EXPIRY = 3600
@@ -33,9 +35,6 @@ OPENSEARCH_SOURCE_FIELDS = [
     "shot_description",
 ]
 
-# ---------------------------------------------------------------------------
-# AWS clients (initialised at module level for Lambda container reuse)
-# ---------------------------------------------------------------------------
 bedrock_config = Config(
     read_timeout=300,
     retries={"max_attempts": 5, "mode": "adaptive"},
@@ -51,11 +50,6 @@ def generate_presigned_url(bucket, key):
         )
     except ClientError:
         return ""
-
-
-# ===================================================================
-# Lambda handler
-# ===================================================================
 
 def lambda_handler(event, context):
     """Route incoming API Gateway requests to the appropriate search mode."""
@@ -116,19 +110,20 @@ def search_by_text(aoss_visual_index, client, user_query):
     embedding_model = os.environ["embedding_model"]
     neptune_client = _get_neptune_client(region)
 
-    # 1. Generate embedding
+    # 1. Generate embeddings (text retrieval for description, video retrieval for video)
     query_embedding = _generate_text_embedding(embedding_model, user_query)
+    video_query_embedding = _generate_video_query_embedding(embedding_model, user_query)
 
     # 2. Hybrid OpenSearch search (visual index)
     aoss_query = {
-        "size": MAX_OPENSEARCH_RESULTS,
+        "size": DEFAULT_VISUAL_RESULTS,
         "_source": OPENSEARCH_SOURCE_FIELDS,
         "query": {
             "hybrid": {
                 "queries": [
                     {"match": {"shot_description": user_query}},
-                    {"knn": {"shot_desc_vector": {"vector": query_embedding, "k": 50}}},
-                    {"knn": {"shot_video_vector": {"vector": query_embedding, "k": 50}}},
+                    {"knn": {"shot_desc_vector": {"vector": query_embedding, "k": DEFAULT_VISUAL_RESULTS}}},
+                    {"knn": {"shot_video_vector": {"vector": video_query_embedding, "k": DEFAULT_VISUAL_RESULTS}}},
                 ],
             }
         },
@@ -155,7 +150,7 @@ def search_by_text(aoss_visual_index, client, user_query):
     # 4. Audio index search (always)
     aoss_audio_index = os.environ.get("aoss_audio_index", "")
     if aoss_audio_index:
-        transcript_embedding = _generate_text_embedding(embedding_model, user_query)
+        transcript_embedding = query_embedding
         audio_hits = _search_audio_index(client, aoss_audio_index, transcript_embedding)
         audio_shots = _map_audio_hits_to_shots(audio_hits, neptune_client, neptune_graph_id)
         existing_ids = {(r["jobId"], r["shot_id"]) for r in unranked_results}
@@ -227,9 +222,20 @@ def search_by_text_agentic(user_query):
             return []
 
         agent_results = json.loads(json_match.group(1))
-        results_list = agent_results.get("results", [])
+        raw_results = agent_results.get("results", [])
 
-        # Agent returns minimal {jobId, shot_id, score} — enrich via Neptune
+        # Flatten grouped format: [{jobId, shots: [{shot_id, score}]}] → [{jobId, shot_id, score}]
+        results_list = []
+        for group in raw_results:
+            job_id = group.get("jobId", "")
+            for shot in group.get("shots", []):
+                results_list.append({
+                    "jobId": job_id,
+                    "shot_id": shot.get("shot_id", ""),
+                    "score": shot.get("score", 0),
+                })
+
+        # Enrich via Neptune
         region = os.environ["region"]
         neptune_graph_id = os.environ["neptune_graph_id"]
         enriched = _enrich_results_from_neptune(results_list, neptune_graph_id, region)
@@ -256,12 +262,12 @@ def search_by_image(aoss_visual_index, client, base64_image, img_format="jpeg"):
     image_embedding = _generate_image_embedding(embedding_model, base64_image, img_format)
 
     aoss_query = {
-        "size": MAX_OPENSEARCH_RESULTS,
+        "size": DEFAULT_IMAGE_RESULTS,
         "query": {
             "knn": {
                 "shot_image_vector": {
                     "vector": image_embedding,
-                    "k": 50,
+                    "k": DEFAULT_IMAGE_RESULTS,
                 }
             }
         },
@@ -286,6 +292,13 @@ def search_by_image(aoss_visual_index, client, base64_image, img_format="jpeg"):
                 "score": hit["_score"],
             }
         )
+
+    # Normalize kNN scores to 0–1 range
+    if results:
+        max_score = max(r["score"] for r in results)
+        if max_score > 0:
+            for r in results:
+                r["score"] = round(r["score"] / max_score, 4)
 
     # Neptune enrichment adds video_name, timestamps, faces, adjacency
     enriched_results = _enrich_results_from_neptune(
@@ -342,25 +355,17 @@ def search_by_clip(aoss_visual_index, client, user_query):
 
         all_frame_search_res = []
         with ThreadPoolExecutor(max_workers=num_frames) as executor:
-            future_to_frame = {}
-            for frame_path in extracted_frames:
-                future = executor.submit(
-                    lambda p: base64.b64encode(open(p, "rb").read()).decode(),
-                    frame_path,
-                )
-                future_to_frame[future] = frame_path
-
-            for future in as_completed(future_to_frame):
+            futures = {
+                executor.submit(_search_single_frame, aoss_visual_index, client, fp): fp
+                for fp in extracted_frames
+            }
+            for future in as_completed(futures):
                 try:
-                    base64_image = future.result()
-                    frame_search_res = search_by_image(
-                        aoss_visual_index, client, base64_image, "png"
-                    )
-                    all_frame_search_res.append(frame_search_res)
+                    all_frame_search_res.append(future.result())
                 except Exception as e:
                     logger.error(
                         "Frame search failed for %s: %s",
-                        future_to_frame[future],
+                        futures[future],
                         str(e),
                     )
 
@@ -424,6 +429,42 @@ def search_by_clip(aoss_visual_index, client, user_query):
             except OSError:
                 pass
 
+def _search_single_frame(aoss_visual_index, client, frame_path):
+    """Encode a frame and run lightweight image search."""
+    base64_image = base64.b64encode(open(frame_path, "rb").read()).decode()
+    return _search_by_image_for_clip(aoss_visual_index, client, base64_image, "png")
+
+def _search_by_image_for_clip(aoss_visual_index, client, base64_image, img_format="jpeg"):
+    """Lightweight image search: embedding + kNN only for clip search."""
+    embedding_model = os.environ["embedding_model"]
+    image_embedding = _generate_image_embedding(embedding_model, base64_image, img_format)
+
+    aoss_query = {
+        "size": DEFAULT_IMAGE_RESULTS,
+        "query": {"knn": {"shot_image_vector": {"vector": image_embedding, "k": DEFAULT_IMAGE_RESULTS}}},
+        "_source": OPENSEARCH_SOURCE_FIELDS,
+    }
+
+    response = client.search(body=aoss_query, index=aoss_visual_index)
+    hits = response.get("hits", {}).get("hits", [])
+    results = [
+        {
+            "jobId": hit["_source"].get("jobId", ""),
+            "shot_id": hit["_source"].get("shot_id", ""),
+            "shot_description": hit["_source"].get("shot_description", ""),
+            "score": hit["_score"],
+        }
+        for hit in hits
+    ]
+
+    # Normalize kNN scores to 0–1 range
+    if results:
+        max_score = max(r["score"] for r in results)
+        if max_score > 0:
+            for r in results:
+                r["score"] = round(r["score"] / max_score, 4)
+
+    return results
 
 # ===================================================================
 # Embedding generation helpers
@@ -459,6 +500,39 @@ def _generate_text_embedding(model_id, text):
         return response_body["embeddings"][0]["embedding"]
     except ClientError as e:
         logger.error("Failed to generate text embedding: %s", str(e), exc_info=True)
+        raise
+
+
+def _generate_video_query_embedding(model_id, text):
+    """Generate a text query embedding with VIDEO_RETRIEVAL purpose for searching video vectors."""
+    if not text:
+        text = " "
+
+    body = json.dumps(
+        {
+            "taskType": "SINGLE_EMBEDDING",
+            "singleEmbeddingParams": {
+                "embeddingPurpose": "VIDEO_RETRIEVAL",
+                "embeddingDimension": 3072,
+                "text": {
+                    "truncationMode": "END",
+                    "value": text,
+                },
+            },
+        }
+    )
+
+    try:
+        response = bedrock_client.invoke_model(
+            body=body,
+            modelId=model_id,
+            accept="application/json",
+            contentType="application/json",
+        )
+        response_body = json.loads(response["body"].read())
+        return response_body["embeddings"][0]["embedding"]
+    except ClientError as e:
+        logger.error("Failed to generate video query embedding: %s", str(e), exc_info=True)
         raise
 
 
@@ -610,90 +684,6 @@ def _execute_neptune_query(neptune_client, graph_id, query, parameters=None):
         logger.error("Neptune query failed: %s | Query: %s", str(e), query)
         raise
 
-
-# -------------------------------------------------------------------
-# Pre-retrieval: entity detection
-# -------------------------------------------------------------------
-
-def _detect_entity_segments(neptune_graph_id, region, user_query):
-    """Check if the query contains known face/celebrity names and return matching segment IDs.
-
-    Returns a list of (segmentId, videoId) tuples, or an empty list if no entity found.
-    """
-    neptune_client = _get_neptune_client(region)
-
-    # Tokenise the query into candidate terms.  We try progressively shorter
-    # n-grams starting from the full query down to single words, so that
-    # multi-word names (e.g., "Barack Obama") are matched first.
-    query_words = user_query.strip().split()
-    candidate_terms = []
-    for n in range(len(query_words), 0, -1):
-        for i in range(len(query_words) - n + 1):
-            candidate_terms.append(" ".join(query_words[i : i + n]))
-
-    matched_face_id = None
-    matched_label = None
-
-    for term in candidate_terms:
-        try:
-            face_results = _execute_neptune_query(
-                neptune_client,
-                neptune_graph_id,
-                "MATCH (f:Face) WHERE toLower(f.label) CONTAINS toLower($queryTerm) "
-                "RETURN f.label AS label, f.faceId AS faceId",
-                parameters={"queryTerm": term},
-            )
-        except ClientError:
-            logger.warning("Entity detection query failed for term: %s", term)
-            continue
-
-        if face_results:
-            matched_label = face_results[0].get("label")
-            matched_face_id = face_results[0].get("faceId")
-            logger.info(
-                "Entity detected: label=%s, faceId=%s", matched_label, matched_face_id
-            )
-            break
-
-    if not matched_face_id and not matched_label:
-        return []
-
-    # Query for segments where this face appears
-    try:
-        if matched_face_id:
-            segment_results = _execute_neptune_query(
-                neptune_client,
-                neptune_graph_id,
-                "MATCH (f:Face {faceId: $faceId})-[:APPEARS_IN_SEGMENT]->(s:Segment)"
-                "<-[:HAS_SEGMENT]-(v:Video) "
-                "RETURN s.segmentId AS segmentId, v.jobId AS jobId",
-                parameters={"faceId": matched_face_id},
-            )
-        else:
-            # Celebrity faces may not have a faceId; match by label instead
-            segment_results = _execute_neptune_query(
-                neptune_client,
-                neptune_graph_id,
-                "MATCH (f:Face {label: $label})-[:APPEARS_IN_SEGMENT]->(s:Segment)"
-                "<-[:HAS_SEGMENT]-(v:Video) "
-                "RETURN s.segmentId AS segmentId, v.jobId AS jobId",
-                parameters={"label": matched_label},
-            )
-    except ClientError:
-        logger.warning("Segment lookup failed for entity: %s", matched_label)
-        return []
-
-    entity_segments = []
-    for row in segment_results:
-        segment_id = row.get("segmentId")
-        video_id = row.get("jobId")
-        if segment_id:
-            entity_segments.append((segment_id, video_id))
-
-    logger.info("Entity segments found: %d", len(entity_segments))
-    return entity_segments
-
-
 # -------------------------------------------------------------------
 # Entity detection helpers
 # -------------------------------------------------------------------
@@ -714,7 +704,7 @@ def _fetch_all_face_labels(neptune_client, graph_id):
 
 
 def _simple_entity_expansion(user_query, unranked_results, neptune_client, graph_id):
-    """Find segments for people mentioned by name in the query (no LLM needed)."""
+    """Find segments for people mentioned by name in the query."""
     face_labels = _fetch_all_face_labels(neptune_client, graph_id)
     if not face_labels:
         return unranked_results
@@ -767,12 +757,12 @@ def _simple_entity_expansion(user_query, unranked_results, neptune_client, graph
 def _search_audio_index(client, audio_index, transcript_embedding):
     """Search the audio/transcript index using kNN on transcript vectors."""
     query = {
-        "size": 50,
+        "size": DEFAULT_AUDIO_RESULTS,
         "query": {
             "knn": {
                 "transcript_vector": {
                     "vector": transcript_embedding,
-                    "k": 50,
+                    "k": DEFAULT_AUDIO_RESULTS,
                 }
             }
         },
@@ -854,45 +844,110 @@ def _map_audio_hits_to_shots(audio_hits, neptune_client, graph_id):
 # -------------------------------------------------------------------
 
 def _enrich_results_from_neptune(results, neptune_graph_id, region):
-    """Enrich search results with metadata from Neptune: video_name, timestamps, faces, adjacency."""
+    """Enrich search results with metadata from Neptune: video_name, timestamps, faces, adjacency.
+
+    Uses 3 batched Neptune queries (metadata, faces, adjacency)
+    """
     if not results:
         return results
 
     neptune_client = _get_neptune_client(region)
-    enriched = []
 
-    for result in results:
+    # Build list of segment IDs to query in batch
+    segment_ids = []
+    for r in results:
+        job_id = r.get("jobId", "")
+        shot_id = r.get("shot_id", "")
+        if job_id and shot_id:
+            segment_ids.append(f"{job_id}_{shot_id}")
+        else:
+            segment_ids.append("")
+
+    valid_segment_ids = [sid for sid in segment_ids if sid]
+
+    # Batch query 1: segment metadata + video name
+    metadata_map = {}
+    if valid_segment_ids:
+        try:
+            metadata_results = _execute_neptune_query(
+                neptune_client, neptune_graph_id,
+                "MATCH (v:Video)-[:HAS_SEGMENT]->(s:Segment) "
+                "WHERE s.segmentId IN $segmentIds "
+                "RETURN s.segmentId AS segmentId, v.videoName AS videoName, "
+                "s.startTime AS startTime, s.endTime AS endTime, "
+                "s.description AS description, s.transcript AS transcript",
+                parameters={"segmentIds": valid_segment_ids},
+            )
+            metadata_map = {row.get("segmentId", ""): row for row in metadata_results}
+        except ClientError:
+            logger.warning("Batch metadata query failed for %d segments", len(valid_segment_ids))
+
+    # Batch query 2: faces for all segments
+    face_map = {}
+    if valid_segment_ids:
+        try:
+            face_results = _execute_neptune_query(
+                neptune_client, neptune_graph_id,
+                "MATCH (f:Face)-[:APPEARS_IN_SEGMENT]->(s:Segment) "
+                "WHERE s.segmentId IN $segmentIds "
+                "RETURN s.segmentId AS segmentId, f.label AS label, f.isCelebrity AS isCelebrity",
+                parameters={"segmentIds": valid_segment_ids},
+            )
+            for fr in face_results:
+                sid = fr.get("segmentId", "")
+                label = fr.get("label", "Unknown")
+                is_celebrity_raw = fr.get("isCelebrity", "false")
+                if isinstance(is_celebrity_raw, str):
+                    is_celebrity = is_celebrity_raw.lower() == "true"
+                else:
+                    is_celebrity = bool(is_celebrity_raw)
+                face_map.setdefault(sid, []).append({"label": label, "isCelebrity": is_celebrity})
+        except ClientError:
+            logger.warning("Batch face query failed for %d segments", len(valid_segment_ids))
+
+    # Batch query 3: adjacency for all segments
+    adjacency_map = {}
+    if valid_segment_ids:
+        try:
+            adjacency_results = _execute_neptune_query(
+                neptune_client, neptune_graph_id,
+                "MATCH (s:Segment) WHERE s.segmentId IN $segmentIds "
+                "OPTIONAL MATCH (prev:Segment)-[:NEXT_SEGMENT]->(s) "
+                "OPTIONAL MATCH (s)-[:NEXT_SEGMENT]->(nxt:Segment) "
+                "RETURN s.segmentId AS segmentId, "
+                "prev.segmentId AS prevSegmentId, nxt.segmentId AS nextSegmentId",
+                parameters={"segmentIds": valid_segment_ids},
+            )
+            for ar in adjacency_results:
+                sid = ar.get("segmentId", "")
+                prev_id = ar.get("prevSegmentId") or ""
+                next_id = ar.get("nextSegmentId") or ""
+                # Extract shot_id from segmentId (format: "{jobId}_{shot_id}")
+                prev_shot = prev_id.split("_", 1)[1] if prev_id and "_" in prev_id else None
+                next_shot = next_id.split("_", 1)[1] if next_id and "_" in next_id else None
+                adjacency_map[sid] = {"prev": prev_shot, "next": next_shot}
+        except ClientError:
+            logger.warning("Batch adjacency query failed for %d segments", len(valid_segment_ids))
+
+    # Assemble enriched results from the maps
+    enriched = []
+    for i, result in enumerate(results):
         job_id = result.get("jobId", "")
         shot_id = result.get("shot_id", "")
-        segment_id = f"{job_id}_{shot_id}" if job_id and shot_id else ""
+        segment_id = segment_ids[i]
 
-        video_name = ""
-        start_time = 0
-        end_time = 0
-        transcript = ""
-        faces = []
-        adjacent_segments = {"prev": None, "next": None}
-        segment_meta = {}
+        meta = metadata_map.get(segment_id, {})
+        video_name = meta.get("videoName", "")
+        start_time = meta.get("startTime", 0)
+        end_time = meta.get("endTime", 0)
+        transcript = meta.get("transcript", "")
 
-        if segment_id:
-            # Fetch segment metadata and video name
-            segment_meta = _get_segment_metadata(
-                neptune_client, neptune_graph_id, segment_id
-            )
-            video_name = segment_meta.get("videoName", "")
-            start_time = segment_meta.get("startTime", 0)
-            end_time = segment_meta.get("endTime", 0)
-            transcript = segment_meta.get("transcript", "")
+        faces = face_map.get(segment_id, [])
+        adjacent_segments = adjacency_map.get(segment_id, {"prev": None, "next": None})
 
-            # Fetch face labels for this segment
-            faces = _get_faces_for_segment(
-                neptune_client, neptune_graph_id, segment_id
-            )
-
-            # Fetch adjacent segments
-            adjacent_segments = _get_adjacent_segments(
-                neptune_client, neptune_graph_id, segment_id
-            )
+        # Split faces into public figures (celebrities) and other named faces, deduplicated
+        public_figures = list(dict.fromkeys(f["label"] for f in faces if f.get("isCelebrity") and not f.get("label", "").startswith("Unknown")))
+        other_faces = list(dict.fromkeys(f["label"] for f in faces if not f.get("isCelebrity") and not f.get("label", "").startswith("Unknown")))
 
         enriched_result = {
             "jobId": job_id,
@@ -900,12 +955,14 @@ def _enrich_results_from_neptune(results, neptune_graph_id, region):
             "shot_id": shot_id,
             "shot_startTime": start_time,
             "shot_endTime": end_time,
-            "shot_description": result.get("shot_description") or segment_meta.get("description", ""),
+            "shot_description": result.get("shot_description") or meta.get("description", ""),
             "shot_transcript": transcript,
             "composite_key": f"{job_id}/{shot_id}_composite.png" if job_id and shot_id else "",
             "clip_key": f"{job_id}/{shot_id}_clip.mp4" if job_id and shot_id else "",
             "score": result.get("score", 0),
             "faces": faces,
+            "shot_publicFigures": ", ".join(public_figures),
+            "shot_faces": ", ".join(other_faces),
             "adjacentSegments": adjacent_segments,
         }
         enriched.append(enriched_result)
@@ -958,6 +1015,15 @@ def _merge_adjacent_results(results):
                 else:
                     break
 
+            # Rebuild face strings from the merged faces list, deduplicated
+            current["shot_publicFigures"] = ", ".join(dict.fromkeys(
+                f["label"] for f in current.get("faces", [])
+                if f.get("isCelebrity") and not f.get("label", "").startswith("Unknown")
+            ))
+            current["shot_faces"] = ", ".join(dict.fromkeys(
+                f["label"] for f in current.get("faces", [])
+                if not f.get("isCelebrity") and not f.get("label", "").startswith("Unknown")
+            ))
             merged.append(current)
             i = j
 
@@ -965,100 +1031,3 @@ def _merge_adjacent_results(results):
     return merged
 
 
-def _get_segment_metadata(neptune_client, graph_id, segment_id):
-    """Query Neptune for segment metadata including video name and timestamps."""
-    try:
-        results = _execute_neptune_query(
-            neptune_client,
-            graph_id,
-            "MATCH (v:Video)-[:HAS_SEGMENT]->(s:Segment {segmentId: $segmentId}) "
-            "RETURN v.videoName AS videoName, s.startTime AS startTime, "
-            "s.endTime AS endTime, s.transcript AS transcript, "
-            "s.description AS description",
-            parameters={"segmentId": segment_id},
-        )
-        if results:
-            row = results[0]
-            return {
-                "videoName": row.get("videoName", ""),
-                "startTime": row.get("startTime", 0),
-                "endTime": row.get("endTime", 0),
-                "transcript": row.get("transcript", ""),
-                "description": row.get("description", ""),
-            }
-    except ClientError:
-        logger.warning("Failed to fetch segment metadata for: %s", segment_id)
-
-    return {"videoName": "", "startTime": 0, "endTime": 0, "transcript": "", "description": ""}
-
-
-def _get_faces_for_segment(neptune_client, graph_id, segment_id):
-    """Query Neptune for all Face nodes linked to a given segment."""
-    try:
-        results = _execute_neptune_query(
-            neptune_client,
-            graph_id,
-            "MATCH (f:Face)-[:APPEARS_IN_SEGMENT]->(s:Segment {segmentId: $segmentId}) "
-            "RETURN f.label AS label, f.isCelebrity AS isCelebrity",
-            parameters={"segmentId": segment_id},
-        )
-
-        faces = []
-        for row in results:
-            label = row.get("label", "Unknown")
-            is_celebrity_raw = row.get("isCelebrity", "false")
-            # Neptune may store booleans as strings
-            if isinstance(is_celebrity_raw, str):
-                is_celebrity = is_celebrity_raw.lower() == "true"
-            else:
-                is_celebrity = bool(is_celebrity_raw)
-
-            faces.append({"label": label, "isCelebrity": is_celebrity})
-        return faces
-    except ClientError:
-        logger.warning("Failed to fetch faces for segment: %s", segment_id)
-        return []
-
-
-def _get_adjacent_segments(neptune_client, graph_id, segment_id):
-    """Query Neptune for previous and next segments relative to the given segment."""
-    adjacent = {"prev": None, "next": None}
-
-    # Previous segment
-    try:
-        prev_results = _execute_neptune_query(
-            neptune_client,
-            graph_id,
-            "MATCH (prev:Segment)-[:NEXT_SEGMENT]->(curr:Segment {segmentId: $segmentId}) "
-            "RETURN prev.segmentId AS prevSegmentId",
-            parameters={"segmentId": segment_id},
-        )
-        if prev_results:
-            prev_segment_id = prev_results[0].get("prevSegmentId", "")
-            if prev_segment_id:
-                # Extract shot_id from segmentId (format: "{jobId}_{shot_id}")
-                parts = prev_segment_id.split("_", 1)
-                if len(parts) > 1:
-                    adjacent["prev"] = parts[1]
-    except ClientError:
-        logger.warning("Failed to fetch prev segment for: %s", segment_id)
-
-    # Next segment
-    try:
-        next_results = _execute_neptune_query(
-            neptune_client,
-            graph_id,
-            "MATCH (curr:Segment {segmentId: $segmentId})-[:NEXT_SEGMENT]->(nxt:Segment) "
-            "RETURN nxt.segmentId AS nextSegmentId",
-            parameters={"segmentId": segment_id},
-        )
-        if next_results:
-            next_segment_id = next_results[0].get("nextSegmentId", "")
-            if next_segment_id:
-                parts = next_segment_id.split("_", 1)
-                if len(parts) > 1:
-                    adjacent["next"] = parts[1]
-    except ClientError:
-        logger.warning("Failed to fetch next segment for: %s", segment_id)
-
-    return adjacent

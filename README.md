@@ -2,7 +2,7 @@
 
 Media companies, content creators, and video archivists can have terabytes or even petabytes of video footage, making it difficult to sort and find content.
 
-Video Semantic Search leverages [Amazon Bedrock](https://aws.amazon.com/bedrock/), [Amazon Rekognition](https://aws.amazon.com/rekognition/), [Amazon Transcribe](https://aws.amazon.com/transcribe/) and [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) to enable quick and efficient searching for specific scenes, actions, concepts, people, or objects within large volumes of video data using natural language queries.
+Video Semantic Search leverages [Amazon Bedrock](https://aws.amazon.com/bedrock/), [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/), [Amazon Rekognition](https://aws.amazon.com/rekognition/), [Amazon Transcribe](https://aws.amazon.com/transcribe/), [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) and [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) to enable quick and efficient searching for specific scenes, actions, concepts, people, or objects within large volumes of video data using natural language queries.
 
 By harnessing the power of semantic understanding and multimodal analysis, users can formulate intuitive queries and receive relevant results, significantly enhancing the discoverability and usability of extensive video libraries. This in turn enables rapid footage retrieval, and unlocks new creative possibilities.
 
@@ -16,14 +16,14 @@ These following steps walk through the sequence of actions that enable video sem
 2. Upload videos to [Amazon S3](https://aws.amazon.com/s3/) with [S3 pre-signed URLs](https://docs.aws.amazon.com/AmazonS3/latest/userguide/ShareObjectPreSignedURL.html).
 3. After a video is uploaded successfully, an API call to [Amazon API Gateway](https://aws.amazon.com/api-gateway/) triggers [AWS Lambda](https://aws.amazon.com/lambda/) to queue new indexing-video request in [Amazon Simple Queue Service (Amazon SQS)](https://aws.amazon.com/sqs/).
 4. AWS Lambda processes new messages in the SQS queue, initiating [AWS Step Functions](https://aws.amazon.com/step-functions/) workflow.
-5. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/segments.html) detect multiple video shots from the original video, containing the start, end, and duration of each shot. Shot metadata is used to generate sequence of frames which are grouped by individual video shot and stored in Amazon S3.
+5. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/segments.html) detects multiple video shots from the original video, containing the start, end, and duration of each shot. Alternatively, interval-based segmentation can be used to split videos into fixed-duration segments. Shot/segment metadata is used to generate sequence of frames which are grouped by individual video shot and stored in Amazon S3.
 6. In parallel, create an [Amazon Transcribe](https://aws.amazon.com/transcribe/) job to generate a transcription for the video.
 7. AWS Step Functions uses the [Map state](https://docs.aws.amazon.com/step-functions/latest/dg/state-map.html) to run a set of workflow for each video shot stored in Amazon S3 in parallel.
-8. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/celebrities.html) detects celebrities in the shots. Foundation model in [Amazon Bedrock](https://aws.amazon.com/bedrock/) detects private figures by analyzing text labels or titles that appear in the video shots. Use multimodal LLMs in Amazon Bedrock to generate image embeddings and compare shot similarities, propagating recognized figures across visually similar shots even when faces are obscured or titles are absent.
+8. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/celebrities.html) detects celebrities in the shots. [Amazon Rekognition Face Collection](https://docs.aws.amazon.com/rekognition/latest/dg/collections.html) indexes and matches faces across shots for consistent person tracking. Foundation model in [Amazon Bedrock](https://aws.amazon.com/bedrock/) detects private figures by analyzing text labels or titles that appear in the video shots. Multimodal LLMs in Amazon Bedrock generate image embeddings and compare shot similarities, propagating recognized figures across visually similar shots even when faces are obscured or titles are absent. Face recognition data and person-segment relationships are stored in [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) as a knowledge graph.
 9. Foundation model in Amazon Bedrock generates shots’ contextual descriptions from shots’ visual images, detected celebrities and private figures as well as relevant audio transcriptions.
-10. Embedding model in Amazon Bedrock generates the embeddings of video shots’ descriptions and visual images. [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) stores the embeddings and other shots’ metadata in vector database.
-11. Embedding model in Amazon Bedrock generates the embedding of the users’ query which is then used to perform semantic search for the videos from Amazon OpenSearch vector database. Combine semantic search with traditional keyword searches across other fields to enhance search accuracy.
-12. [Amazon DynamoDB](https://aws.amazon.com/dynamodb/) tables store profiling and video indexing job metadata to keep track of the jobs’ status and other relevant information
+10. [Amazon Nova Multimodal Embeddings](https://aws.amazon.com/ai/generative-ai/nova/) model in Amazon Bedrock generates the embeddings of video shots’ descriptions and visual images. [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) stores the embeddings and other shots’ metadata in vector database.
+11. Embedding model in Amazon Bedrock generates the embedding of the users’ query which is then used to perform semantic search for the videos from Amazon OpenSearch vector database. Combine semantic search with traditional keyword searches across other fields to enhance search accuracy. [Cohere Rerank](https://docs.aws.amazon.com/bedrock/latest/userguide/rerank.html) model reranks results for improved relevance. Optionally, [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/) provides an agentic RAG search strategy that uses an AI agent (built with [Strands Agents](https://strandsagents.com/)) to intelligently reason about the query, perform person-aware searches via the Neptune knowledge graph, and deliver more accurate results.
+12. [Amazon DynamoDB](https://aws.amazon.com/dynamodb/) tables store profiling and video indexing job metadata to keep track of the jobs’ status and other relevant information. [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) graph database stores face recognition data, person identities, and video-person relationships.
 
 For further information, please refer to the links below:
 
@@ -50,7 +50,7 @@ For further information, please refer to the links below:
 - Docker
 
   This solution has been built and tested using SAM CLI in conjunction with [Docker Desktop](https://www.docker.com/products/docker-desktop/) to make the build process as smooth as possible. It is possible to build and deploy this solution without Docker but we recommend using Docker as it reduces the number of local dependancies needed.
-  Note that the npm `deploy` script described below requires Docker to be installed.
+  Note that the deploy script described below requires Docker to be installed.
 
 ## Amazon Bedrock requirements
 
@@ -62,7 +62,7 @@ Note:
 
 - You can deploy the solution to a different region from where you requested Base Model access.
 - While the Base Model access approval is instant, it might take several minutes to get access and see the list of models in the console.
-- The current deployment requires access to **Claude 3.7 Sonnet**, **Titan Multimodal Embeddings G1**, **Cohere Embedding v3** and **Cohere Rerank 3.5 (us-west-2)**.
+- The current deployment requires access to **Claude Sonnet 4.6**, **Claude Haiku 4.5**, **Amazon Nova Multimodal Embeddings v1**, and **Cohere Rerank 3.5**.
 
 ## Deployment
 
@@ -88,12 +88,18 @@ cd video-semantic-search-with-aws-ai-ml-services
 > Ensure that Docker is installed and running before proceeding with the deployment.
 
 ```bash
-cd frontend
-npm install
-npm run deploy
+./scripts/deploy.sh
 ```
 
-The deployment can take approximately 5-10 minutes.
+The deploy script supports the following options:
+
+```bash
+./scripts/deploy.sh                  # Deploy all (backend + frontend)
+./scripts/deploy.sh --backend        # Deploy backend only (SAM stack + AgentCore)
+./scripts/deploy.sh --frontend       # Deploy frontend only
+```
+
+The deployment can take approximately 10-15 minutes for a full deployment.
 
 ### Create login details for the web application
 
@@ -105,12 +111,15 @@ Once complete, the CLI output will show a value for the CloudFront URL to be abl
 
 ## User Experience
 
-The solution currently supports the following query types:
+The solution currently supports the following features:
+
+### Search
 
 1. **Text Search**
 
 - Input text-based query to search for specific content. Example: All the scenes that feature football field.
 - Use quotation marks ("") to emphasize specific keywords. Example: Werner Vogels "shaking hands" with other people.
+- **Agentic Search** toggle enables an AI agent (powered by Amazon Bedrock AgentCore) that intelligently reasons about queries, performs person-aware searches using the knowledge graph, and reranks results for improved accuracy.
 
 2. **Image Search**
 
@@ -119,6 +128,13 @@ The solution currently supports the following query types:
 3. **Clip Search**
 
 - Upload a video clip to find the original source video that contains the clip.
+
+### Admin Portal
+
+- View and manage all video indexing jobs with status tracking and progress monitoring.
+- Configure indexing settings (segmentation method, model parameters) per job.
+- Track processing costs in real-time.
+- **Face Gallery** — browse detected faces across indexed videos, label and manage face identities stored in the Neptune knowledge graph.
 
 ![UI](assets/video-semantic-search-ui.gif "Video Semantic Search UI")
 
@@ -143,13 +159,21 @@ Follow these steps to remove all resources created by this solution:
 - Navigate to the S3 console, select the S3 buckets created by the solution (they will have names starting with `vss-`), then remove all objects in the buckets.
 - Note: S3 buckets must be empty before they can be deleted by the SAM cleanup
 
-2. **Delete the Stack**
+2. **Delete the AgentCore Stack**
 
 - Navigate to the `infrastructure` folder:
 
 ```bash
 cd infrastructure
 ```
+
+- Delete the AgentCore stack first:
+
+```bash
+sam delete --stack-name vss-agentcore
+```
+
+3. **Delete the Main Stack**
 
 - Run the SAM delete command:
 
@@ -158,6 +182,7 @@ sam delete
 ```
 
 - Follow the prompts to confirm the deletion
+- This will remove the Neptune graph, ECR repository, and all other resources created by the main stack
 
 ## Security
 

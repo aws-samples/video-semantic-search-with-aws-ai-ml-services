@@ -24,6 +24,7 @@ export interface SearchResult {
 export interface SearchResultsProps {
   results: SearchResult[];
   isLoading: boolean;
+  loadingText?: string;
   hasSearched: boolean;
   activeIndex: number | null;
   onSelectShot: (result: SearchResult, index: number, thumbnailRect: DOMRect) => void;
@@ -49,7 +50,6 @@ const ResultCard = styled.div<{ $isActive: boolean }>`
   border: 2px solid ${(props) => (props.$isActive ? "#0073bb" : "#d5dbdb")};
   border-radius: 8px;
   background-color: ${(props) => (props.$isActive ? "#f2f8fd" : "#ffffff")};
-  cursor: pointer;
   overflow: hidden;
   transition:
     border-color 0.15s ease,
@@ -66,6 +66,7 @@ const ThumbnailContainer = styled.div`
   aspect-ratio: 16 / 9;
   background-color: #1a1a2e;
   overflow: hidden;
+  cursor: pointer;
 `;
 
 const ThumbnailImage = styled.img`
@@ -164,6 +165,7 @@ function millisecondsToTimeFormat(ms: number): string {
 const SearchResults: React.FC<SearchResultsProps> = ({
   results,
   isLoading,
+  loadingText = "Searching...",
   hasSearched,
   activeIndex,
   onSelectShot,
@@ -186,7 +188,7 @@ const SearchResults: React.FC<SearchResultsProps> = ({
       <Box textAlign="center" padding="xxl">
         <Spinner size="large" />
         <Box variant="p" padding={{ top: "s" }}>
-          Searching...
+          {loadingText}
         </Box>
       </Box>
     );
@@ -221,18 +223,18 @@ const SearchResults: React.FC<SearchResultsProps> = ({
             <ResultCard
               key={`${result.jobId}-${result.shot_id}-${index}`}
               $isActive={isActive}
-              onClick={() => {
-                const thumbEl = document.querySelector(
-                  `[data-card-index="${index}"]`,
-                );
-                onSelectShot(
-                  result,
-                  index,
-                  thumbEl?.getBoundingClientRect() ?? new DOMRect(),
-                );
-              }}
             >
               <ThumbnailContainer
+                onClick={() => {
+                  const thumbEl = document.querySelector(
+                    `[data-card-index="${index}"]`,
+                  );
+                  onSelectShot(
+                    result,
+                    index,
+                    thumbEl?.getBoundingClientRect() ?? new DOMRect(),
+                  );
+                }}
                 data-thumbnail
                 data-card-index={index}
                 ref={(el) => cardRefCallback(index, el)}
@@ -282,7 +284,7 @@ const SearchResults: React.FC<SearchResultsProps> = ({
                       )}
                       {result.shot_faces && (
                         <div>
-                          <Box variant="awsui-key-label">Other Faces</Box>
+                          <Box variant="awsui-key-label">Private Persona</Box>
                           <Box>{result.shot_faces}</Box>
                         </div>
                       )}

@@ -238,7 +238,7 @@ def create_hybrid_search_pipeline(client):
                     "normalization": {"technique": "min_max"},
                     "combination": {
                         "technique": "arithmetic_mean",
-                        "parameters": {"weights": [0.2, 0.5, 0.3]},
+                        "parameters": {"weights": [0.1, 0.5, 0.4]},
                     },
                 }
             }

@@ -407,16 +407,14 @@ Resources:
     DependsOn:
       - TriggerImageBuild
     Properties:
-      AgentRuntimeName: !Sub
-        - "${StackNameUnderscore}_${AgentName}"
-        - StackNameUnderscore: !Join ["_", !Split ["-", !Ref "AWS::StackName"]]
+      AgentRuntimeName: !Ref AgentName
       AgentRuntimeArtifact:
         ContainerConfiguration:
           ContainerUri: !Sub "${ECRRepository.RepositoryUri}:${ImageTag}"
       RoleArn: !GetAtt AgentExecutionRole.Arn
       NetworkConfiguration:
         NetworkMode: !Ref NetworkMode
-      Description: !Sub "Video search agent for ${AWS::StackName}"
+      Description: !Sub "Video search agent"
       EnvironmentVariables:
         AWS_REGION: !Ref AWS::Region
         AOSS_HOST: !Ref AossHost

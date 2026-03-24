@@ -56,6 +56,7 @@ const Search: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [activeTabId, setActiveTabId] = useState("text");
   const [agenticEnabled, setAgenticEnabled] = useState(true);
+  const [clipStatus, setClipStatus] = useState<"idle" | "uploading" | "searching">("idle");
 
   // Shared player state
   const [selectedShotIndex, setSelectedShotIndex] = useState<number | null>(
@@ -98,9 +99,7 @@ const Search: React.FC = () => {
   // Pre-fetch presigned URLs for all unique videos in results
   useEffect(() => {
     const uniqueNames = [...new Set(results.map((r) => r.video_name))];
-    const toFetch = uniqueNames.filter(
-      (name) => !videoUrlsRef.current[name],
-    );
+    const toFetch = uniqueNames.filter((name) => !videoUrlsRef.current[name]);
     if (toFetch.length === 0) return;
 
     let cancelled = false;
@@ -270,8 +269,7 @@ const Search: React.FC = () => {
           shot_endTime: parseInt(result["shot_endTime"]) || 0,
           shot_description: result["shot_description"] || "",
           shot_publicFigures: result["shot_publicFigures"] || "",
-          shot_faces:
-            result["shot_privateFigures"] || result["shot_faces"] || "",
+          shot_faces: result["shot_faces"] || "",
           shot_transcript: result["shot_transcript"] || "",
           score: parseFloat(result["score"]) || 0,
           composite_url: result["composite_url"] || "",
@@ -364,6 +362,7 @@ const Search: React.FC = () => {
       }
 
       setIsLoading(true);
+      setClipStatus("uploading");
       setErrorMessage(null);
       setResults([]);
 
@@ -395,6 +394,7 @@ const Search: React.FC = () => {
 
           if (uploadResponse.status === 204) {
             // Step 3: Search by clip
+            setClipStatus("searching");
             const searchResponse = await authenticatedAxios.get(
               AWS_API_URL + "/search?type=clip&query=" + clipFileName,
             );
@@ -411,6 +411,7 @@ const Search: React.FC = () => {
         );
       } finally {
         setIsLoading(false);
+        setClipStatus("idle");
         setHasSearched(true);
         setClipFiles([]);
       }
@@ -436,10 +437,12 @@ const Search: React.FC = () => {
               id: "text",
               label: "Text Search",
               content: (
-                <div style={{ position: "relative" }}>
+                <div style={{ position: "relative", minHeight: 100 }}>
                   <div style={{ position: "absolute", top: 0, right: 0 }}>
                     <Toggle
-                      onChange={({ detail }) => setAgenticEnabled(detail.checked)}
+                      onChange={({ detail }) =>
+                        setAgenticEnabled(detail.checked)
+                      }
                       checked={agenticEnabled}
                     >
                       AI Reasoning
@@ -483,7 +486,13 @@ const Search: React.FC = () => {
               id: "image",
               label: "Image Search",
               content: (
-                <div style={{ paddingTop: "8px", maxWidth: "480px" }}>
+                <div
+                  style={{
+                    paddingTop: "8px",
+                    maxWidth: "480px",
+                    minHeight: 100,
+                  }}
+                >
                   <FormField description="Upload an image to find similar scenes in your video library">
                     <FileUpload
                       onChange={({ detail }) => {
@@ -517,7 +526,13 @@ const Search: React.FC = () => {
               id: "clip",
               label: "Clip Search",
               content: (
-                <div style={{ paddingTop: "8px", maxWidth: "480px" }}>
+                <div
+                  style={{
+                    paddingTop: "8px",
+                    maxWidth: "480px",
+                    minHeight: 100,
+                  }}
+                >
                   <FormField description="Upload an MP4 clip to find the source video in your library">
                     <FileUpload
                       onChange={({ detail }) => {
@@ -564,8 +579,12 @@ const Search: React.FC = () => {
           onLoadedMetadata={() => {
             const pending = pendingVideoRef.current;
             const videoEl = videoRef.current;
-            if (pending && !pending.metadataLoaded && videoEl
-                && pending.loadId === loadIdRef.current) {
+            if (
+              pending &&
+              !pending.metadataLoaded &&
+              videoEl &&
+              pending.loadId === loadIdRef.current
+            ) {
               pending.metadataLoaded = true;
               videoEl.currentTime = (pending.startTime + 1) / 1000;
             }
@@ -573,8 +592,12 @@ const Search: React.FC = () => {
           onSeeked={() => {
             const pending = pendingVideoRef.current;
             const videoEl = videoRef.current;
-            if (pending && pending.metadataLoaded && videoEl
-                && pending.loadId === loadIdRef.current) {
+            if (
+              pending &&
+              pending.metadataLoaded &&
+              videoEl &&
+              pending.loadId === loadIdRef.current
+            ) {
               pendingVideoRef.current = null;
               setIsVideoLoading(false);
               videoEl.play().catch(() => {});
@@ -582,7 +605,11 @@ const Search: React.FC = () => {
           }}
           onPlay={() => {
             const videoEl = videoRef.current;
-            if (videoEl && endTimeRef.current > 0 && videoEl.currentTime >= endTimeRef.current / 1000) {
+            if (
+              videoEl &&
+              endTimeRef.current > 0 &&
+              videoEl.currentTime >= endTimeRef.current / 1000
+            ) {
               endTimeRef.current = 0;
             }
           }}
@@ -595,8 +622,14 @@ const Search: React.FC = () => {
             zIndex: 10,
             borderRadius: "6px 6px 0 0",
             backgroundColor: "#000",
-            visibility: videoPos && selectedShotIndex !== null && !isVideoLoading ? "visible" : "hidden",
-            pointerEvents: videoPos && selectedShotIndex !== null && !isVideoLoading ? "auto" : "none",
+            visibility:
+              videoPos && selectedShotIndex !== null && !isVideoLoading
+                ? "visible"
+                : "hidden",
+            pointerEvents:
+              videoPos && selectedShotIndex !== null && !isVideoLoading
+                ? "auto"
+                : "none",
           }}
         />
         {isVideoLoading && videoPos && selectedShotIndex !== null && (
@@ -624,6 +657,7 @@ const Search: React.FC = () => {
         <SearchResults
           results={results}
           isLoading={isLoading}
+          loadingText={clipStatus === "uploading" ? "Uploading clip..." : "Searching..."}
           hasSearched={hasSearched}
           activeIndex={selectedShotIndex}
           onSelectShot={handleSelectShot}
