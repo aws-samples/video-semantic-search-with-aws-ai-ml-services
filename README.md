@@ -19,9 +19,9 @@ These following steps walk through the sequence of actions that enable video sem
 5. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/segments.html) detects multiple video shots from the original video, containing the start, end, and duration of each shot. Alternatively, interval-based segmentation can be used to split videos into fixed-duration segments. Shot/segment metadata is used to generate sequence of frames which are grouped by individual video shot and stored in Amazon S3.
 6. In parallel, create an [Amazon Transcribe](https://aws.amazon.com/transcribe/) job to generate a transcription for the video.
 7. AWS Step Functions uses the [Map state](https://docs.aws.amazon.com/step-functions/latest/dg/state-map.html) to run a set of workflow for each video shot stored in Amazon S3 in parallel.
-8. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/celebrities.html) detects celebrities in the shots. [Amazon Rekognition Face Collection](https://docs.aws.amazon.com/rekognition/latest/dg/collections.html) indexes and matches faces across shots for consistent person tracking. Foundation model in [Amazon Bedrock](https://aws.amazon.com/bedrock/) detects private figures by analyzing text labels or titles that appear in the video shots. Multimodal LLMs in Amazon Bedrock generate image embeddings and compare shot similarities, propagating recognized figures across visually similar shots even when faces are obscured or titles are absent. Face recognition data and person-segment relationships are stored in [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) as a knowledge graph.
-9. Foundation model in Amazon Bedrock generates shots’ contextual descriptions from shots’ visual images, detected celebrities and private figures as well as relevant audio transcriptions.
-10. [Amazon Nova Multimodal Embeddings](https://aws.amazon.com/ai/generative-ai/nova/) model in Amazon Bedrock generates the embeddings of video shots’ descriptions and visual images. [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) stores the embeddings and other shots’ metadata in vector database.
+8. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/celebrities.html) detects celebrities in the shots. [Amazon Rekognition Face Collection](https://docs.aws.amazon.com/rekognition/latest/dg/collections.html) indexes detected faces and matches them across shots for consistent person tracking. Face recognition data and person-segment relationships are stored in [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) as a knowledge graph.
+9. Foundation model in Amazon Bedrock generates shots’ contextual descriptions from shots’ visual images as well as relevant audio transcriptions.
+10. [Amazon Nova Multimodal Embeddings](https://aws.amazon.com/ai/generative-ai/nova/) model in Amazon Bedrock generates text, image, and video embeddings of video shots’ descriptions, visual frames, and video clips. [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) stores the embeddings and other shots’ metadata in vector database. [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) stores the video structure as a knowledge graph including segments, frames, face appearances, and temporal relationships.
 11. Embedding model in Amazon Bedrock generates the embedding of the users’ query which is then used to perform semantic search for the videos from Amazon OpenSearch vector database. Combine semantic search with traditional keyword searches across other fields to enhance search accuracy. [Cohere Rerank](https://docs.aws.amazon.com/bedrock/latest/userguide/rerank.html) model reranks results for improved relevance. Optionally, [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/) provides an agentic RAG search strategy that uses an AI agent (built with [Strands Agents](https://strandsagents.com/)) to intelligently reason about the query, perform person-aware searches via the Neptune knowledge graph, and deliver more accurate results.
 12. [Amazon DynamoDB](https://aws.amazon.com/dynamodb/) tables store profiling and video indexing job metadata to keep track of the jobs’ status and other relevant information. [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) graph database stores face recognition data, person identities, and video-person relationships.
 
@@ -152,37 +152,18 @@ If you encounter any issues during video indexing process, please consider the f
 
 ## Clean Up
 
-Follow these steps to remove all resources created by this solution:
-
-1. **Empty S3 Buckets**
-
-- Navigate to the S3 console, select the S3 buckets created by the solution (they will have names starting with `vss-`), then remove all objects in the buckets.
-- Note: S3 buckets must be empty before they can be deleted by the SAM cleanup
-
-2. **Delete the AgentCore Stack**
-
-- Navigate to the `infrastructure` folder:
+Run the destroy script to remove all resources created by this solution:
 
 ```bash
-cd infrastructure
+./scripts/destroy.sh
 ```
 
-- Delete the AgentCore stack first:
+The script will prompt for confirmation before proceeding. It performs the following cleanup:
 
-```bash
-sam delete --stack-name vss-agentcore
-```
-
-3. **Delete the Main Stack**
-
-- Run the SAM delete command:
-
-```bash
-sam delete
-```
-
-- Follow the prompts to confirm the deletion
-- This will remove the Neptune graph, ECR repository, and all other resources created by the main stack
+1. Empties all S3 buckets (videos, shots, images, transcripts, clip search, static web, logging, agent code)
+2. Deletes the Rekognition face collection
+3. Deletes the AgentCore CloudFormation stack
+4. Deletes the main CloudFormation stack (including Neptune graph, OpenSearch collection, and all other resources)
 
 ## Security
 
