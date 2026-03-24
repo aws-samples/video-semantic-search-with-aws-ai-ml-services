@@ -2,7 +2,7 @@
 
 Media companies, content creators, and video archivists can have terabytes or even petabytes of video footage, making it difficult to sort and find content.
 
-Video Semantic Search leverages [Amazon Bedrock](https://aws.amazon.com/bedrock/), [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/), [Amazon Rekognition](https://aws.amazon.com/rekognition/), [Amazon Transcribe](https://aws.amazon.com/transcribe/), [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) and [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) to enable quick and efficient searching for specific scenes, actions, concepts, people, or objects within large volumes of video data using natural language queries.
+Video Semantic Search leverages [Amazon Bedrock](https://aws.amazon.com/bedrock/), [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/), [Amazon Rekognition](https://aws.amazon.com/rekognition/), [Amazon Transcribe](https://aws.amazon.com/transcribe/), [Amazon Neptune Analytics](https://aws.amazon.com/neptune/) and [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) to enable quick and efficient searching for specific scenes, actions, concepts, people, or objects within large volumes of video data using natural language queries.
 
 By harnessing the power of semantic understanding and multimodal analysis, users can formulate intuitive queries and receive relevant results, significantly enhancing the discoverability and usability of extensive video libraries. This in turn enables rapid footage retrieval, and unlocks new creative possibilities.
 
@@ -19,11 +19,11 @@ These following steps walk through the sequence of actions that enable video sem
 5. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/segments.html) detects multiple video shots from the original video, containing the start, end, and duration of each shot. Alternatively, interval-based segmentation can be used to split videos into fixed-duration segments. Shot/segment metadata is used to generate sequence of frames which are grouped by individual video shot and stored in Amazon S3.
 6. In parallel, create an [Amazon Transcribe](https://aws.amazon.com/transcribe/) job to generate a transcription for the video.
 7. AWS Step Functions uses the [Map state](https://docs.aws.amazon.com/step-functions/latest/dg/state-map.html) to run a set of workflow for each video shot stored in Amazon S3 in parallel.
-8. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/celebrities.html) detects celebrities in the shots. [Amazon Rekognition Face Collection](https://docs.aws.amazon.com/rekognition/latest/dg/collections.html) indexes detected faces and matches them across shots for consistent person tracking. Face recognition data and person-segment relationships are stored in [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) as a knowledge graph.
+8. [Amazon Rekognition](https://docs.aws.amazon.com/rekognition/latest/dg/celebrities.html) detects celebrities in the shots. [Amazon Rekognition Face Collection](https://docs.aws.amazon.com/rekognition/latest/dg/collections.html) indexes detected faces and matches them across shots for consistent person tracking. Face recognition data and person-segment relationships are stored in [Amazon Neptune Analytics](https://aws.amazon.com/neptune/) as a knowledge graph.
 9. Foundation model in Amazon Bedrock generates shots’ contextual descriptions from shots’ visual images as well as relevant audio transcriptions.
-10. [Amazon Nova Multimodal Embeddings](https://aws.amazon.com/ai/generative-ai/nova/) model in Amazon Bedrock generates text, image, and video embeddings of video shots’ descriptions, visual frames, and video clips. [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) stores the embeddings and other shots’ metadata in vector database. [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) stores the video structure as a knowledge graph including segments, frames, face appearances, and temporal relationships.
+10. [Amazon Nova Multimodal Embeddings](https://aws.amazon.com/ai/generative-ai/nova/) model in Amazon Bedrock generates text, image, and video embeddings of video shots’ descriptions, visual frames, and video clips. [Amazon OpenSearch](https://aws.amazon.com/opensearch-service/features/serverless/) stores the embeddings and other shots’ metadata in vector database. [Amazon Neptune Analytics](https://aws.amazon.com/neptune/) stores the video structure as a knowledge graph including segments, frames, face appearances, and temporal relationships.
 11. Embedding model in Amazon Bedrock generates the embedding of the users’ query which is then used to perform semantic search for the videos from Amazon OpenSearch vector database. Combine semantic search with traditional keyword searches across other fields to enhance search accuracy. [Cohere Rerank](https://docs.aws.amazon.com/bedrock/latest/userguide/rerank.html) model reranks results for improved relevance. Optionally, [Amazon Bedrock AgentCore](https://aws.amazon.com/bedrock/agentcore/) provides an agentic RAG search strategy that uses an AI agent (built with [Strands Agents](https://strandsagents.com/)) to intelligently reason about the query, perform person-aware searches via the Neptune knowledge graph, and deliver more accurate results.
-12. [Amazon DynamoDB](https://aws.amazon.com/dynamodb/) tables store profiling and video indexing job metadata to keep track of the jobs’ status and other relevant information. [Amazon Neptune Analytics](https://aws.amazon.com/neptune/features/neptune-analytics/) graph database stores face recognition data, person identities, and video-person relationships.
+12. [Amazon DynamoDB](https://aws.amazon.com/dynamodb/) tables store profiling and video indexing job metadata to keep track of the jobs’ status and other relevant information. [Amazon Neptune Analytics](https://aws.amazon.com/neptune/) graph database stores face recognition data, person identities, and video-person relationships.
 
 For further information, please refer to the links below:
 
@@ -54,15 +54,7 @@ For further information, please refer to the links below:
 
 ## Amazon Bedrock requirements
 
-**Base Models Access**
-
-If you are looking to interact with models from Amazon Bedrock, you need to [request access to the base models in one of the regions where Amazon Bedrock is available](https://console.aws.amazon.com/bedrock/home?#/modelaccess). Make sure to read and accept models' end-user license agreements or EULA.
-
-Note:
-
-- You can deploy the solution to a different region from where you requested Base Model access.
-- While the Base Model access approval is instant, it might take several minutes to get access and see the list of models in the console.
-- The current deployment requires access to **Claude Sonnet 4.6**, **Claude Haiku 4.5**, **Amazon Nova Multimodal Embeddings v1**, and **Cohere Rerank 3.5**.
+The current deployment uses the following models: **Claude Sonnet 4.6**, **Claude Haiku 4.5**, **Amazon Nova Multimodal Embeddings**, and **Cohere Rerank 3.5**. Ensure these models are available in your deployment region and that your account has the necessary permissions to invoke them.
 
 ## Deployment
 
